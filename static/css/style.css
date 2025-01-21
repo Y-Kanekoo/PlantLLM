@@ -1,0 +1,79 @@
+/* 全体のスタイル */
+body {
+    background-color: #f8f9fa;
+}
+
+/* ヘッダー */
+h1 {
+    color: #2c3e50;
+    font-weight: bold;
+}
+
+/* カード */
+.card {
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    border: none;
+    transition: all 0.3s ease;
+}
+
+.card:hover {
+    box-shadow: 0 6px 8px rgba(0, 0, 0, 0.15);
+}
+
+.card-title {
+    color: #2c3e50;
+    font-weight: 600;
+}
+
+/* フォーム */
+.form-label {
+    font-weight: 500;
+}
+
+/* 画像プレビュー */
+#preview-container {
+    margin: 1rem 0;
+    padding: 1rem;
+    background-color: #f8f9fa;
+    border-radius: 0.5rem;
+}
+
+#image-preview {
+    max-width: 100%;
+    border-radius: 0.5rem;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+/* 診断結果 */
+#diagnosis-result {
+    white-space: pre-line;
+    line-height: 1.6;
+}
+
+.diagnosis-content {
+    padding: 1rem;
+    background-color: #f8f9fa;
+    border-radius: 0.5rem;
+    border-left: 4px solid #007bff;
+}
+
+/* ローディング */
+.spinner-border {
+    width: 3rem;
+    height: 3rem;
+}
+
+/* レスポンシブデザイン */
+@media (max-width: 768px) {
+    .container {
+        padding: 1rem;
+    }
+    
+    h1 {
+        font-size: 1.8rem;
+    }
+    
+    #image-preview {
+        max-height: 200px;
+    }
+} 
