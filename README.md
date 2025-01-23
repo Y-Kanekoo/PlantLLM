@@ -1,29 +1,34 @@
-# シンプル植物病害診断システム（Simple Plant Disease Diagnosis System）
+# 植物種分類システム（Plant Species Classification System）
 
 ## 概要
 
-このプロジェクトは、Google Gemini Vision Pro と FastAPI を使用して、植物の種類と病気の有無を簡単に診断するシステムです。
-画像認識と大規模言語モデルを組み合わせることで、迅速な診断を実現します。
+このプロジェクトは、Google Gemini Vision Pro を使用して、植物の種類を高精度に分類するシステムです。
+画像認識と大規模言語モデルを組み合わせることで、詳細な特徴分析と分類を実現します。
 
 ## 主な機能
 
-- 植物の種類の識別
-- 病気の有無の判定
-- 処理時間の計測
+- 植物種の自動分類
+- 特徴ベースの分析
+- 信頼度スコアの提供
+- バッチ処理による効率的な分類
+- 結果の可視化と分析
+- 詳細なログ記録
 
 ## 技術スタック
 
-- **バックエンド**: FastAPI
-- **AI/ML**: Google Gemini Vision Pro
+- **AI/ML**: Google Gemini Vision Pro (1.5 Flash / 2.0 Flash)
 - **画像処理**: Pillow
+- **データ分析**: Pandas, NumPy
+- **可視化**: Matplotlib, Seaborn
+- **進捗管理**: tqdm
 
 ## セットアップ手順
 
 ### 1. リポジトリのクローン
 
 ```bash
-git clone https://github.com/[your-username]/simple-plant-diagnosis.git
-cd simple-plant-diagnosis
+git clone https://github.com/[your-username]/plant-classification.git
+cd plant-classification
 ```
 
 ### 2. 環境構築
@@ -44,57 +49,121 @@ pip install -r requirements.txt
 
 ```env
 GEMINI_API_KEY=your_gemini_api_key
-DEBUG=True
-UPLOAD_DIR=uploads
-HOST=0.0.0.0
-PORT=8000
-RELOAD=True
-LOG_LEVEL=DEBUG
 ```
 
-### 4. アプリケーションの起動
+### 4. データセットの準備
 
 ```bash
-uvicorn app_simple:app --reload
+python download_dataset.py
 ```
 
-## API エンドポイント
+### 5. 分類の実行
 
-### 画像診断
+```bash
+# 植物種の分類
+python plant_species_classification.py
 
-- **エンドポイント**: `/diagnose`
-- **メソッド**: POST
-- **入力**: 画像ファイル（JPEG、PNG、GIF）
-- **出力**:
-  - 植物の種類
-  - 病気の有無
-  - 処理時間
+# 結果の可視化
+python visualize_results.py
+```
 
-## 制限事項
+## システム構成
 
-- 対応画像形式: JPEG、PNG、GIF
-- 最大ファイルサイズ: 10MB
-- 画像サイズ: 自動的に 1024px にリサイズ
+### メインコンポーネント
 
-## 開発者向け情報
+1. **植物種分類（plant_species_classification.py）**
+
+   - 画像の読み込みと前処理
+   - Gemini API による特徴抽出
+   - バッチ処理による効率的な分類
+   - 結果の保存とログ記録
+
+2. **結果可視化（visualize_results.py）**
+
+   - 分類結果の可視化
+   - 信頼度分布の分析
+   - 処理時間の統計
+   - 特徴分析のグラフ化
+
+3. **ユーティリティ（utils.py）**
+   - 共通機能の提供
+   - エラーハンドリング
+   - ヘルパー関数
 
 ### ディレクトリ構造
 
 ```
 .
-├── app_simple.py        # メインアプリケーション
-├── requirements.txt     # 依存パッケージ
-├── .env                # 環境変数
-├── uploads/           # アップロードされた画像
-└── static/           # 静的ファイル
-    ├── css/
-    └── js/
+├── plant_species_classification.py  # メイン分類スクリプト
+├── visualize_results.py            # 結果可視化スクリプト
+├── utils.py                        # ユーティリティ関数
+├── requirements.txt                # 依存パッケージ
+├── .env                           # 環境変数
+├── dataset/                       # データセット
+│   └── PlantVillage_3Variants/
+│       ├── color/                # カラー画像
+│       ├── grayscale/           # グレースケール画像
+│       └── segmented/           # セグメント化画像
+├── results/                      # 分類結果
+│   ├── analysis_YYYYMMDD_HHMMSS/  # 実行時刻ごとの結果
+│   └── visualization/           # 可視化結果
+└── logs/                        # ログファイル
 ```
+
+## API 制限
+
+### Gemini 1.5 Flash
+
+- 15 リクエスト/分（RPM）
+- 100 万 トークン/分（TPM）
+- 1,500 リクエスト/日（RPD）
+
+### Gemini 2.0 Flash
+
+- 10 RPM
+- 400 万 TPM
+- 1,500 RPD
+
+## 結果フォーマット
+
+分類結果は以下の JSON 形式で保存されます：
+
+```json
+{
+    "plant_name": {
+        "common": "植物の一般名",
+        "scientific": "学名",
+        "alternatives": ["代替候補1", "代替候補2"]
+    },
+    "confidence": 0-100の信頼度スコア,
+    "features": {
+        "leaf_type": "葉の特徴",
+        "venation": "葉脈パターン",
+        "margin": "葉の縁の特徴"
+    },
+    "process_time": 処理時間（秒）
+}
+```
+
+## 制限事項
+
+- 対応画像形式: JPEG、PNG
+- 推奨画像サイズ: 1024px 以上
+- API 制限に基づく処理制限
+
+## 開発者向け情報
 
 ### デバッグ
 
-- ログファイル: `app.log`
-- デバッグモード: `.env`の`DEBUG=True`で有効化
+- 詳細なログ: `classification.log`
+- バッチサイズの調整: `batch_size`パラメータ
+- 待機時間の調整: `wait_time`パラメータ
+
+### パフォーマンス最適化
+
+- バッチ処理による効率化
+- エラーリトライ機能
+- 並列処理の実装
 
 ## ライセンス
 

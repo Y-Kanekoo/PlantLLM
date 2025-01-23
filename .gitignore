@@ -33,12 +33,25 @@ wheels/
 .env
 *.log
 uploads/
+dataset/
+results/
+logs/
 *.jpg
 *.jpeg
 *.png
 *.gif
+*.JPG
+*.JPEG
+*.PNG
+*.GIF
 app.log
+classification.log
+download.log
 
 # API Keys
 .kaggle/
-kaggle.json 
+kaggle.json
+
+# OS specific
+.DS_Store
+Thumbs.db 
