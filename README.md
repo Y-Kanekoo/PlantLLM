@@ -22,6 +22,18 @@
 - **可視化**: Matplotlib, Seaborn
 - **進捗管理**: tqdm
 
+# PlantLLM - 植物病気診断システム
+
+Gemini API を使用した植物の病気診断システムです。画像をアップロードすることで、植物の種類と健康状態を診断します。
+
+## 特徴
+
+- 複数の Gemini モデルに対応（2.0 Flash, 1.5 Flash, 1.5 Flash-8B, 1.5 Pro）
+- 画像のドラッグ＆ドロップまたはカメラでの撮影に対応
+- 診断履歴の保存と管理
+- レスポンシブデザイン
+- エラー時の自動リトライとフォールバック
+
 ## セットアップ手順
 
 ### 1. リポジトリのクローン
@@ -115,7 +127,7 @@ python visualize_results.py
 ### Gemini 1.5 Flash
 
 - 15 リクエスト/分（RPM）
-- 100 万 トークン/分（TPM）
+- 100 万トークン/分（TPM）
 - 1,500 リクエスト/日（RPD）
 
 ### Gemini 2.0 Flash
@@ -165,9 +177,33 @@ python visualize_results.py
 - エラーリトライ機能
 - 並列処理の実装
 
+## 新機能: 病気診断システム
+
+### インストール
+
+1. 依存パッケージのインストール:
+
+```bash
+pip install -r requirements.txt
+```
+
+2. サーバーの起動:
+
+```bash
+python -m uvicorn app_simple:app --host 0.0.0.0 --port 8000 --reload
+```
+
+### 主な機能
+
+- 複数画像の一括診断
+- 診断履歴の保存と表示
+- 結果の保存と共有
+- レスポンシブな UI
+- エラー時の自動リカバリー
+
 ## ライセンス
 
-MIT License
+MIT ライセンス
 
 ## 貢献
 

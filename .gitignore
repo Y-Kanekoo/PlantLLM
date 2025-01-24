@@ -33,6 +33,7 @@ wheels/
 .env
 *.log
 uploads/
+static/diagnosis_images/
 dataset/
 results/
 logs/

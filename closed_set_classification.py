@@ -29,95 +29,68 @@ MAX_RPD = 1500  # 1日あたりの最大リクエスト数
 SAFETY_FACTOR = 0.8  # 安全係数を80%に調整
 
 
-def create_prompt(labels: list) -> str:
-    """分類プロンプトを生成する（ラベルを既知として扱う）
+def create_prompt() -> str:
+    """Few-shot分類用のプロンプトを生成する"""
+    return """植物の葉の画像を分析し、以下の形式で回答してください。
+最も可能性の高い診断から順に、5つまで提示してください。
 
-    Args:
-        labels (list): 利用可能なラベルのリスト
-
-    Returns:
-        str: 生成されたプロンプト
-    """
-    prompt = f"""この植物の画像を分析し、以下の手順で正確な診断を行ってください。
-
-1. 植物種の特定（最重要）:
-   A. 葉の形態学的特徴
-      - 葉の配置: 単葉/複葉、対生/互生
-      - 葉身の形状: 楕円形/心形/針形など
-      - 葉縁の特徴: 鋸歯/全縁/波状など
-      - 葉脈のパターン: 平行脈/網状脈/羽状脈
-   
-   B. 葉の質感と表面特性
-      - 表面の光沢: 艶あり/艶なし
-      - 毛の有無と特徴
-      - 葉の厚さや硬さの印象
-   
-   C. 植物全体の特徴（可能な場合）
-      - 成長パターン
-      - 茎の特徴
-      - 全体的な色調
-
-2. 健康状態の評価:
-   A. 正常な特徴
-      - 適切な葉色（種類による）
-      - 正常な葉の形状
-      - 健康的な生育状態
-   
-   B. 異常が見られる場合
-      - 変色: 黄化/褐変/斑点
-      - 変形: 萎縮/巻き/歪み
-      - 損傷: 穴/裂け目/壊死
-
-3. 病気の症状分析（該当する場合）:
-   A. 病変の特徴
-      - 形状: 円形/不規則/同心円状
-      - 色: 褐色/黒色/白色など
-      - テクスチャ: 粉状/水浸状/隆起
-   
-   B. 病変の分布
-      - 発生位置: 葉縁/葉脈/葉全体
-      - 広がりパターン: 散在/集中/進行性
-   
-   C. 進行段階
-      - 初期/中期/後期の判断
-      - 重症度の評価
-
-4. 以下のラベルから最も適切なものを選択:
-{', '.join(labels)}
-
-回答形式:
+回答形式：
 1番目の候補:
-- 選択したラベル: [ラベル名]
-- 確信度: [0-100]
-- 主要な識別特徴:
-  * 植物種の決定的特徴: [最も重要な形態学的特徴]
-  * 健康状態/病気の特徴: [観察された症状や状態]
-  * 類似種との区別点: [他の候補との明確な違い]
-- 選択理由: [特徴と診断の関連性を具体的に]
+植物名: [植物名を英語で]
+状態: [病名を英語で、または「Healthy」]
+確信度: [0-100の数値]
+特徴:
+- 葉の特徴: [形状、色、テクスチャなど]
+- 症状: [病変、変色などがある場合]
 
-[2-5番目も同様の形式]
+2番目の候補:
+[同様の形式]
 
-重要な判断基準:
-1. 確信度の判断基準
-   - 90-100%: すべての特徴が完全に一致
-   - 70-89%: 主要な特徴が一致、わずかな不確実性
-   - 50-69%: 重要な特徴の一部が一致
-   - 30-49%: 一部の特徴のみ一致
-   - 0-29%: 特徴の一致が少ない
+注意事項：
+1. 植物名は以下のいずれかを使用：
+   Apple, Blueberry, Cherry, Corn, Grape, Orange, Peach, Pepper, 
+   Potato, Raspberry, Soybean, Squash, Strawberry, Tomato
 
-2. 注意事項
-   - 植物種の特定を最優先すること
-   - 不確かな特徴は明確にその旨を記載
-   - 複数の可能性がある場合は、それぞれの根拠を明示
-   - 画質による制限がある場合は具体的に言及
+2. 病名は以下のいずれかを使用（健康な場合は「Healthy」）：
+   - Apple:
+     * Apple scab: 暗褐色の斑点、葉が黄ばむ
+     * Black rot: 茶色の円形病斑、紫色の縁取り
+     * Cedar apple rust: オレンジ色の斑点、黄色いハロー
+   - Cherry:
+     * Powdery mildew: 白い粉状の被膜
+   - Corn:
+     * Cercospora leaf spot: 灰色～茶色の小さな斑点
+     * Common rust: 赤褐色の隆起した斑点（pustules）
+     * Northern Leaf Blight: 灰褐色の楕円形病斑、葉脈に沿って拡大
+   - Grape:
+     * Black rot: 茶色～黒色の不規則な斑点
+     * Esca (Black Measles): 赤褐色の斑点、葉脈間が黄化
+     * Leaf blight: 茶色の不規則な病斑
+   - Orange:
+     * Haunglongbing: 黄色の斑点、葉脈が黄化
+   - Peach/Pepper:
+     * Bacterial spot: 小さな茶色の斑点、黄色いハロー
+   - Potato:
+     * Early blight: 同心円状の褐色病斑
+     * Late blight: 水浸状の暗色病斑、白いカビ
+   - Squash:
+     * Powdery mildew: 白い粉状の被膜
+   - Strawberry:
+     * Leaf scorch: 葉縁が紫～茶色に変色
+   - Tomato:
+     * Bacterial spot: 小さな黒色の斑点
+     * Early blight: 同心円状の褐色病斑
+     * Late blight: 水浸状の暗色病斑
+     * Leaf Mold: 葉裏の白～灰色のカビ
+     * Septoria leaf spot: 灰色の小斑点、暗褐色の縁
+     * Spider mites: 葉の黄化、微細な斑点
+     * Target Spot: 同心円状の大きな病斑
+     * Mosaic virus: モザイク状の黄化
+     * Yellow Leaf Curl Virus: 葉の黄化、巻き込み
 
-3. 除外すべき状況
-   - 画像が極端に不鮮明
-   - 重要な特徴が隠れている
-   - 決定的な特徴が確認できない"""
-
-    logger.debug(f"Created detailed prompt with {len(labels)} labels")
-    return prompt
+3. 確信度は必ず0-100の数値で記載
+4. 特徴は具体的に記載
+5. 病気の診断では、上記の特徴的な症状との一致度を重視してください"""
 
 
 def process_single_image(args):
@@ -143,7 +116,7 @@ def process_single_image(args):
                 return None
 
             # Geminiモデルによる分類
-            response = model.generate_content([create_prompt(labels), image])
+            response = model.generate_content([create_prompt(), image])
             response_text = response.text
             logger.debug(f"Model response: {response_text}")
 
