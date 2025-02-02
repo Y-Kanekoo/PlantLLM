@@ -3,13 +3,15 @@ import io
 import time
 import asyncio
 import hashlib
-from typing import Dict, Any
+import json
+from typing import Dict, Any, List, Optional
 from pathlib import Path
 from functools import lru_cache
+from datetime import datetime
 from tenacity import retry, stop_after_attempt, wait_exponential
 from PIL import Image
 import google.generativeai as genai
-from fastapi import FastAPI, UploadFile, Request, BackgroundTasks
+from fastapi import FastAPI, UploadFile, Request, WebSocket, BackgroundTasks, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -31,9 +33,9 @@ logger = logging.getLogger(__name__)
 
 # FastAPIアプリケーションの初期化
 app = FastAPI(
-    title="Simple Plant Disease Diagnosis",
-    description="植物の種類と病気の有無を診断するシンプルなAIシステム",
-    version="1.0.0"
+    title="Plant Disease Diagnosis System",
+    description="植物の種類と病気の有無を診断するAIシステム",
+    version="2.0.0"
 )
 
 # テンプレートとスタティックファイルの設定
@@ -554,96 +556,63 @@ async def diagnose_plant(
 
 class DiagnosisHistory:
     def __init__(self):
-        self.history = []
-        self.max_entries = 100
-        self.image_dir = Path("static/diagnosis_images")
-        self.image_dir.mkdir(parents=True, exist_ok=True)
-        logger.info(
-            f"Initialized DiagnosisHistory with image directory: {self.image_dir}")
+        self.entries: List[DiagnosisEntry] = []
+        self.next_id = 1
+        self.load_history()
 
-    def save_image(self, image_data: bytes, image_hash: str) -> str:
-        """画像を保存し、相対パスを返す"""
-        try:
-            image_path = self.image_dir / f"{image_hash}.jpg"
-            if not image_path.exists():  # 同じハッシュの画像が存在しない場合のみ保存
-                image = Image.open(io.BytesIO(image_data))
-                image.save(image_path, format='JPEG', quality=85)
-                logger.info(f"Saved image to {image_path}")
-            return f"/static/diagnosis_images/{image_hash}.jpg"
-        except Exception as e:
-            logger.error(f"Failed to save image: {e}")
-            return None
+    def add_entry(self, image_path: str, diagnosis_result: Dict[str, Any],
+                  model_used: str, processing_time: float) -> int:
+        entry = DiagnosisEntry(
+            id=self.next_id,
+            timestamp=datetime.now().isoformat(),
+            image_path=image_path,
+            diagnosis_result=diagnosis_result,
+            model_used=model_used,
+            processing_time=processing_time
+        )
+        self.entries.append(entry)
+        self.next_id += 1
+        self.save_history()
+        return entry.id
 
-    def add_entry(self, diagnosis_data: dict, image_data: bytes = None):
-        """新しい診断結果を履歴に追加"""
-        try:
-            image_hash = diagnosis_data.get("image_hash")
-            image_path = None
+    def get_entry(self, entry_id: int) -> Optional[DiagnosisEntry]:
+        for entry in self.entries:
+            if entry.id == entry_id:
+                return entry
+        return None
 
-            if image_data and image_hash:
-                image_path = self.save_image(image_data, image_hash)
-                logger.info(
-                    f"Saved image for diagnosis with hash: {image_hash}")
+    def add_chat_message(self, entry_id: int, role: str, message: str):
+        entry = self.get_entry(entry_id)
+        if entry:
+            entry.chat_history.append({
+                "role": role,
+                "message": message,
+                "timestamp": datetime.now().isoformat()
+            })
+            self.save_history()
 
-            entry = {
-                "id": len(self.history) + 1,
-                "timestamp": time.time(),
-                "diagnosis": diagnosis_data["diagnosis"],
-                "model_info": diagnosis_data["model_info"],
-                "processing_time": diagnosis_data["processing_time"],
-                "image_hash": image_hash,
-                "image_path": image_path
-            }
-
-            self.history.insert(0, entry)
-            logger.info(f"Added new diagnosis entry with ID: {entry['id']}")
-
-            if len(self.history) > self.max_entries:
-                removed = self.history[self.max_entries:]
-                self.history = self.history[:self.max_entries]
-                logger.info(f"Trimmed history to {self.max_entries} entries")
-
-                # 不要な画像の削除
-                for old_entry in removed:
-                    if old_entry.get('image_path'):
-                        try:
-                            image_file = Path(
-                                old_entry['image_path'].lstrip('/'))
-                            if image_file.exists():
-                                image_file.unlink()
-                                logger.info(f"Deleted old image: {image_file}")
-                        except Exception as e:
-                            logger.error(f"Failed to delete old image: {e}")
-
-            return entry
-        except Exception as e:
-            logger.error(f"Failed to add diagnosis entry: {e}")
-            raise
-
-    def get_history(self, limit: int = None) -> list:
-        """診断履歴を取得"""
-        try:
-            if limit:
-                return self.history[:limit]
-            return self.history
-        except Exception as e:
-            logger.error(f"Failed to get history: {e}")
-            return []
+    def get_history(self) -> List[DiagnosisEntry]:
+        return self.entries
 
     def clear_history(self):
-        """履歴をクリア"""
-        try:
-            self.history = []
-            # 画像ファイルの削除
-            for file in self.image_dir.glob("*.jpg"):
-                try:
-                    file.unlink()
-                    logger.info(f"Deleted image file: {file}")
-                except Exception as e:
-                    logger.error(f"Failed to delete image {file}: {e}")
-            logger.info("Successfully cleared diagnosis history")
-        except Exception as e:
-            logger.error(f"Failed to clear history: {e}")
+        self.entries = []
+        self.save_history()
+
+    def save_history(self):
+        history_file = Path("history/diagnosis_history.json")
+        history_file.parent.mkdir(exist_ok=True)
+        with open(history_file, "w", encoding="utf-8") as f:
+            json.dump([entry.dict() for entry in self.entries], f,
+                      ensure_ascii=False, indent=2)
+
+    def load_history(self):
+        history_file = Path("history/diagnosis_history.json")
+        if history_file.exists():
+            with open(history_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                self.entries = [DiagnosisEntry(**entry) for entry in data]
+                if self.entries:
+                    self.next_id = max(entry.id for entry in self.entries) + 1
 
 
 # 診断履歴マネージャーの初期化（グローバルスコープで初期化）
@@ -675,6 +644,88 @@ async def clear_diagnosis_history():
             status_code=500,
             content={"success": False, "message": "履歴の削除に失敗しました"}
         )
+
+# WebSocketコネクション管理
+
+
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: Dict[str, WebSocket] = {}
+
+    async def connect(self, websocket: WebSocket, session_id: str):
+        await websocket.accept()
+        self.active_connections[session_id] = websocket
+
+    def disconnect(self, session_id: str):
+        self.active_connections.pop(session_id, None)
+
+    async def send_message(self, session_id: str, message: str):
+        if session_id in self.active_connections:
+            await self.active_connections[session_id].send_text(message)
+
+
+manager = ConnectionManager()
+
+# チャットエンドポイント（HTTP）
+
+
+@app.post("/chat/{entry_id}")
+async def chat_endpoint(entry_id: int, chat_message: ChatMessage):
+    entry = diagnosis_history.get_entry(entry_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail="診断エントリが見つかりません")
+
+    # チャットモデルで応答を生成
+    try:
+        model = genai.GenerativeModel('gemini-1.5-pro')
+        chat = model.start_chat(history=[])
+        response = await chat.send_message_async(chat_message.message)
+
+        # チャット履歴に追加
+        diagnosis_history.add_chat_message(
+            entry_id, "user", chat_message.message)
+        diagnosis_history.add_chat_message(
+            entry_id, "assistant", response.text)
+
+        return {
+            "success": True,
+            "session_id": chat_message.session_id,
+            "reply": response.text
+        }
+    except Exception as e:
+        logger.error(f"チャットエラー: {str(e)}")
+        raise HTTPException(status_code=500, detail="チャット処理中にエラーが発生しました")
+
+# WebSocketチャットエンドポイント
+
+
+@app.websocket("/ws/chat/{session_id}")
+async def websocket_chat(websocket: WebSocket, session_id: str):
+    await manager.connect(websocket, session_id)
+    try:
+        while True:
+            data = await websocket.receive_text()
+            model = genai.GenerativeModel('gemini-1.5-pro')
+            chat = model.start_chat(history=[])
+            response = await chat.send_message_async(data)
+            await manager.send_message(session_id, response.text)
+    except Exception as e:
+        logger.error(f"WebSocketエラー: {str(e)}")
+    finally:
+        manager.disconnect(session_id)
+
+# 診断履歴の詳細取得エンドポイント
+
+
+@app.get("/history/{entry_id}")
+async def get_history_entry(entry_id: int):
+    entry = diagnosis_history.get_entry(entry_id)
+    if entry:
+        return {"success": True, "entry": entry}
+    return JSONResponse(
+        status_code=404,
+        content={"success": False, "message": "エントリが見つかりません"}
+    )
 
 if __name__ == "__main__":
     uvicorn.run(

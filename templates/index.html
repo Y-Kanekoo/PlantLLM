@@ -3,146 +3,300 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>植物病気診断システム</title>
+    <title>植物病害診断システム</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
-    <link href="{{ url_for('static', path='/css/style.css') }}" rel="stylesheet">
+    <style>
+        .chat-container {
+            max-height: 400px;
+            overflow-y: auto;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            padding: 10px;
+            margin-bottom: 10px;
+        }
+        .chat-message {
+            margin-bottom: 10px;
+            padding: 10px;
+            border-radius: 5px;
+        }
+        .user-message {
+            background-color: #e3f2fd;
+            margin-left: 20%;
+        }
+        .assistant-message {
+            background-color: #f5f5f5;
+            margin-right: 20%;
+        }
+        .diagnosis-card {
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+        .diagnosis-card:hover {
+            transform: scale(1.02);
+        }
+        #uploadSpinner {
+            display: none;
+        }
+        .timestamp {
+            font-size: 0.8em;
+            color: #666;
+        }
+    </style>
 </head>
 <body>
-    <div class="container my-5">
-        <h1 class="text-center mb-4">植物病気診断システム</h1>
+    <div class="container mt-5">
+        <h1 class="mb-4">植物病害診断システム</h1>
         
-        <div class="row justify-content-center">
-            <div class="col-md-8">
-                <!-- アップロードエリア -->
-                <div class="card">
-                    <div class="card-body">
-                        <h5 class="card-title">画像をアップロード</h5>
-                        
-                        <!-- モデル選択 -->
-                        <div class="mb-3">
-                            <label class="form-label">使用モデルを選択</label>
-                            <select class="form-select" id="model-select">
-                                <option value="gemini-2.0-flash-exp">Gemini 2.0 Flash - 最新・高性能</option>
-                                <option value="gemini-1.5-flash">Gemini 1.5 Flash - 高速</option>
-                                <option value="gemini-1.5-flash-8b">Gemini 1.5 Flash-8B - 軽量</option>
-                                <option value="gemini-1.5-pro">Gemini 1.5 Pro - 高精度</option>
-                            </select>
-                            <div class="form-text">
-                                <i class="fas fa-info-circle"></i> 
-                                各モデルの特徴:
-                                <ul class="mt-1">
-                                    <li>2.0 Flash: 最新の高性能モデル、より正確な診断が可能</li>
-                                    <li>1.5 Flash: 高速処理、一般的な診断に最適</li>
-                                    <li>1.5 Flash-8B: 軽量モデル、基本的な診断向け</li>
-                                    <li>1.5 Pro: 高精度、詳細な診断が必要な場合</li>
-                                </ul>
-                            </div>
-                        </div>
-                        
-                        <div id="upload-area" class="upload-area mt-3">
-                            <form id="upload-form">
-                                <div class="drop-zone mb-3">
-                                    <div class="drop-zone-text">
-                                        <i class="fas fa-cloud-upload-alt fa-3x mb-3"></i>
-                                        <p>ここに画像をドラッグ&ドロップ</p>
-                                        <p>または</p>
-                                        <label for="image-input" class="btn btn-outline-primary">
-                                            ファイルを選択
-                                            <input type="file" id="image-input" accept="image/*" multiple hidden>
-                                        </label>
-                                        <button type="button" id="camera-button" class="btn btn-outline-secondary ms-2">
-                                            <i class="fas fa-camera"></i> カメラで撮影
-                                        </button>
-                                    </div>
-                                </div>
-                                
-                                <!-- プレビューエリア -->
-                                <div id="preview-container" class="preview-grid mb-3 d-none">
-                                    <!-- プレビュー画像がここに追加されます -->
-                                </div>
+        <!-- 画像アップロードフォーム -->
+        <div class="card mb-4">
+            <div class="card-body">
+                <h5 class="card-title">画像をアップロード</h5>
+                <form id="uploadForm" enctype="multipart/form-data">
+                    <div class="mb-3">
+                        <input type="file" class="form-control" id="imageInput" accept="image/*" required>
+                    </div>
+                    <button type="submit" class="btn btn-primary">
+                        <span id="uploadSpinner" class="spinner-border spinner-border-sm me-2"></span>
+                        診断開始
+                    </button>
+                </form>
+            </div>
+        </div>
 
-                                <div class="text-center">
-                                    <button type="submit" class="btn btn-primary" disabled>
-                                        <i class="fas fa-search"></i> 診断開始
-                                    </button>
-                                </div>
-                            </form>
+        <!-- 診断結果表示エリア -->
+        <div id="resultArea" style="display: none;">
+            <div class="card mb-4">
+                <div class="card-body">
+                    <h5 class="card-title">診断結果</h5>
+                    <div class="row">
+                        <div class="col-md-6">
+                            <img id="diagnosisImage" class="img-fluid mb-3" alt="診断対象の画像">
+                        </div>
+                        <div class="col-md-6">
+                            <div id="diagnosisResult"></div>
+                            <div class="mt-3">
+                                <button class="btn btn-success" onclick="startChat()">
+                                    質問する
+                                </button>
+                            </div>
                         </div>
                     </div>
                 </div>
+            </div>
 
-                <!-- 診断結果エリア -->
-                <div id="result-card" class="card mt-4 d-none">
+            <!-- チャットエリア -->
+            <div id="chatArea" style="display: none;">
+                <div class="card mb-4">
                     <div class="card-body">
-                        <div class="d-flex justify-content-between align-items-center">
-                            <h5 class="card-title mb-0">診断結果</h5>
-                            <div class="btn-group">
-                                <button class="btn btn-sm btn-outline-secondary" id="toggle-view">
-                                    <i class="fas fa-list"></i> 表示切替
-                                </button>
-                                <button class="btn btn-sm btn-outline-secondary" id="save-result">
-                                    <i class="fas fa-download"></i> 保存
-                                </button>
-                                <button class="btn btn-sm btn-outline-secondary" id="share-result">
-                                    <i class="fas fa-share-alt"></i> 共有
-                                </button>
-                            </div>
-                        </div>
-                        
-                        <div id="loading" class="text-center d-none">
-                            <div class="loading-animation">
-                                <div class="spinner-grow text-primary" role="status">
-                                    <span class="visually-hidden">Loading...</span>
-                                </div>
-                                <p class="mt-2">診断中...</p>
-                                <div class="progress">
-                                    <div class="progress-bar progress-bar-striped progress-bar-animated" 
-                                         role="progressbar" style="width: 0%"></div>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div id="diagnosis-result" class="mt-3">
-                            <!-- 診断結果がここに表示されます -->
-                        </div>
-                    </div>
-                </div>
-
-                <!-- 診断履歴 -->
-                <div class="card mt-4">
-                    <div class="card-body">
-                        <h5 class="card-title">診断履歴</h5>
-                        <div id="history-list" class="list-group">
-                            <!-- 履歴項目がここに追加されます -->
+                        <h5 class="card-title">チャット</h5>
+                        <div class="chat-container" id="chatMessages"></div>
+                        <div class="input-group">
+                            <input type="text" class="form-control" id="chatInput" placeholder="メッセージを入力...">
+                            <button class="btn btn-primary" onclick="sendMessage()">送信</button>
                         </div>
                     </div>
                 </div>
             </div>
         </div>
-    </div>
 
-    <!-- カメラモーダル -->
-    <div class="modal fade" id="camera-modal" tabindex="-1">
-        <div class="modal-dialog">
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h5 class="modal-title">カメラで撮影</h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-                </div>
-                <div class="modal-body">
-                    <video id="camera-preview" autoplay playsinline></video>
-                    <canvas id="camera-canvas" style="display: none;"></canvas>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">キャンセル</button>
-                    <button type="button" class="btn btn-primary" id="take-photo">撮影</button>
+        <!-- 診断履歴 -->
+        <div class="card">
+            <div class="card-body">
+                <h5 class="card-title">診断履歴</h5>
+                <div id="historyList" class="row"></div>
+            </div>
+        </div>
+
+        <!-- 履歴詳細モーダル -->
+        <div class="modal fade" id="historyModal" tabindex="-1">
+            <div class="modal-dialog modal-lg">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title">診断詳細</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                    </div>
+                    <div class="modal-body" id="modalContent"></div>
                 </div>
             </div>
         </div>
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-    <script src="{{ url_for('static', path='/js/main.js') }}"></script>
+    <script>
+        let currentSessionId = null;
+        let currentEntryId = null;
+        let historyModal = null;
+
+        document.addEventListener('DOMContentLoaded', function() {
+            loadHistory();
+            historyModal = new bootstrap.Modal(document.getElementById('historyModal'));
+        });
+
+        // 画像アップロード処理
+        document.getElementById('uploadForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            const formData = new FormData();
+            const imageFile = document.getElementById('imageInput').files[0];
+            formData.append('file', imageFile);
+
+            document.getElementById('uploadSpinner').style.display = 'inline-block';
+            try {
+                const response = await fetch('/diagnose', {
+                    method: 'POST',
+                    body: formData
+                });
+                const result = await response.json();
+                if (result.success) {
+                    showDiagnosisResult(result);
+                    currentEntryId = result.entry_id;
+                    currentSessionId = Date.now().toString();
+                    loadHistory();
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                alert('診断処理中にエラーが発生しました。');
+            } finally {
+                document.getElementById('uploadSpinner').style.display = 'none';
+            }
+        });
+
+        // 診断結果の表示
+        function showDiagnosisResult(result) {
+            document.getElementById('resultArea').style.display = 'block';
+            document.getElementById('diagnosisImage').src = result.image_path;
+            document.getElementById('diagnosisResult').innerHTML = `
+                <h6>診断結果:</h6>
+                <p>${result.diagnosis}</p>
+                <p><small>処理時間: ${result.processing_time.toFixed(2)}秒</small></p>
+            `;
+        }
+
+        // チャット開始
+        function startChat() {
+            document.getElementById('chatArea').style.display = 'block';
+            document.getElementById('chatMessages').innerHTML = '';
+        }
+
+        // メッセージ送信
+        async function sendMessage() {
+            const input = document.getElementById('chatInput');
+            const message = input.value.trim();
+            if (!message) return;
+
+            input.value = '';
+            appendMessage('user', message);
+
+            try {
+                const response = await fetch(`/chat/${currentEntryId}`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        session_id: currentSessionId,
+                        message: message
+                    })
+                });
+                const result = await response.json();
+                if (result.success) {
+                    appendMessage('assistant', result.reply);
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                appendMessage('system', 'エラーが発生しました。');
+            }
+        }
+
+        // メッセージの表示
+        function appendMessage(role, message) {
+            const chatMessages = document.getElementById('chatMessages');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `chat-message ${role}-message`;
+            messageDiv.innerHTML = `
+                <div class="message-content">${message}</div>
+                <div class="timestamp">${new Date().toLocaleTimeString()}</div>
+            `;
+            chatMessages.appendChild(messageDiv);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+
+        // 履歴の読み込み
+        async function loadHistory() {
+            try {
+                const response = await fetch('/history');
+                const result = await response.json();
+                if (result.success) {
+                    displayHistory(result.history);
+                }
+            } catch (error) {
+                console.error('Error:', error);
+            }
+        }
+
+        // 履歴の表示
+        function displayHistory(history) {
+            const historyList = document.getElementById('historyList');
+            historyList.innerHTML = '';
+            
+            history.forEach(entry => {
+                const col = document.createElement('div');
+                col.className = 'col-md-4 mb-3';
+                col.innerHTML = `
+                    <div class="card diagnosis-card" onclick="showHistoryDetail(${entry.id})">
+                        <img src="${entry.image_path}" class="card-img-top" alt="診断画像">
+                        <div class="card-body">
+                            <p class="card-text">
+                                <small class="text-muted">
+                                    ${new Date(entry.timestamp).toLocaleString()}
+                                </small>
+                            </p>
+                        </div>
+                    </div>
+                `;
+                historyList.appendChild(col);
+            });
+        }
+
+        // 履歴詳細の表示
+        async function showHistoryDetail(entryId) {
+            try {
+                const response = await fetch(`/history/${entryId}`);
+                const result = await response.json();
+                if (result.success) {
+                    const entry = result.entry;
+                    document.getElementById('modalContent').innerHTML = `
+                        <div class="row">
+                            <div class="col-md-6">
+                                <img src="${entry.image_path}" class="img-fluid" alt="診断画像">
+                            </div>
+                            <div class="col-md-6">
+                                <h6>診断結果:</h6>
+                                <p>${entry.diagnosis_result.diagnosis}</p>
+                                <p><small>処理時間: ${entry.processing_time.toFixed(2)}秒</small></p>
+                                <p><small>使用モデル: ${entry.model_used}</small></p>
+                                <p><small>診断日時: ${new Date(entry.timestamp).toLocaleString()}</small></p>
+                            </div>
+                        </div>
+                        ${entry.chat_history.length > 0 ? `
+                            <hr>
+                            <h6>チャット履歴:</h6>
+                            <div class="chat-container">
+                                ${entry.chat_history.map(chat => `
+                                    <div class="chat-message ${chat.role}-message">
+                                        <div class="message-content">${chat.message}</div>
+                                        <div class="timestamp">${new Date(chat.timestamp).toLocaleString()}</div>
+                                    </div>
+                                `).join('')}
+                            </div>
+                        ` : ''}
+                    `;
+                    historyModal.show();
+                }
+            } catch (error) {
+                console.error('Error:', error);
+            }
+        }
+    </script>
 </body>
 </html> 
