@@ -232,7 +232,7 @@ def process_image(image_data: bytes, mime_type: str) -> Dict[str, Any]:
 # Gemini APIの設定
 try:
     # 新しいAPIキーを直接設定
-    API_KEY = "AIzaSyBOj802vRyMbu7GRBSGvcdnmoKET2RsNWo"
+    API_KEY = "AIzaSyBENW2hZfRC9o80KdiBWKcsuhsec5Jfn4s"
     genai.configure(api_key=API_KEY)
     logger.info("Successfully configured Gemini API with new key")
 except Exception as e:

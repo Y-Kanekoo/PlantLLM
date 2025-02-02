@@ -388,37 +388,85 @@ def save_results_by_type(results: dict, output_dir: str, prefix: str):
     csv_path = Path(output_dir) / f"{output_base}.csv"
     with open(csv_path, 'w', newline='', encoding='utf-8') as f:
         writer = csv.writer(f)
-        writer.writerow(['Image Path', 'True Label', 'Predicted Label'])
+        # Top-3予測用のヘッダー
+        writer.writerow([
+            'Image Path',
+            'True Label',
+            'Top1 Prediction',
+            'Top1 Confidence',
+            'Top2 Prediction',
+            'Top2 Confidence',
+            'Top3 Prediction',
+            'Top3 Confidence'
+        ])
+
+        # 結果の書き込み
         for result in results['all']['detailed_results']:
-            writer.writerow([
-                result['image_path'],
-                result['true_label'],
-                result['predicted_label']
-            ])
+            row = [result['image_path'], result['true_label']]
+
+            # Top-3予測の追加
+            top3 = result['top3_predictions']
+            for i in range(3):
+                if i < len(top3):
+                    row.extend([top3[i]['label'], top3[i]['confidence']])
+                else:
+                    row.extend(['', 0.0])
+
+            writer.writerow(row)
+
     logger.info(f"CSV results saved to {csv_path}")
 
+    # サマリーJSONの作成
+    summary_path = Path(output_dir) / f"{output_base}_summary.json"
+    summary = {
+        'timestamp': timestamp,
+        'total_images': results['all']['sampling_info']['sampled_images'],
+        'plant_metrics': results['all']['plant_metrics'],
+        'disease_metrics': results['all']['disease_metrics'],
+        'sampling_info': results['all']['sampling_info']
+    }
+    with open(summary_path, 'w', encoding='utf-8') as f:
+        json.dump(summary, f, ensure_ascii=False, indent=2)
+    logger.info(f"Summary saved to {summary_path}")
 
-def sample_images(image_paths: list, n_samples: int = 1000, seed: int = 2025) -> list:
-    """画像パスのリストからランダムにサンプリングする
+
+def sample_images(image_tuples: list, n_samples_per_class: int = 30, seed: int = 2025) -> list:
+    """画像パスのリストから各クラスごとにランダムにサンプリングする
 
     Args:
-        image_paths (list): 画像パスのリスト
-        n_samples (int, optional): サンプリングする画像数. Defaults to 1000.
+        image_tuples (list): (image_path, label, labels)のタプルのリスト
+        n_samples_per_class (int, optional): 各クラスからサンプリングする画像数. Defaults to 30.
         seed (int, optional): 乱数シード. Defaults to 2025.
 
     Returns:
-        list: サンプリングされた画像パスのリスト
+        list: サンプリングされた画像タプルのリスト
     """
     random.seed(seed)
-    if len(image_paths) <= n_samples:
-        logger.warning(
-            f"要求されたサンプル数({n_samples})が全画像数({len(image_paths)})より多いため、全画像を使用します。")
-        return image_paths
 
-    sampled = random.sample(image_paths, n_samples)
+    # クラスごとに画像を分類
+    class_images = {}
+    for image_tuple in image_tuples:
+        # タプルから必要な情報を抽出
+        image_path, label, _ = image_tuple
+        if label not in class_images:
+            class_images[label] = []
+        class_images[label].append(image_tuple)
+
+    # 各クラスから指定枚数をサンプリング
+    sampled_images = []
+    for class_name, images in class_images.items():
+        if len(images) <= n_samples_per_class:
+            logger.warning(
+                f"クラス {class_name} の画像数({len(images)})が要求サンプル数({n_samples_per_class})より少ないため、全画像を使用します。")
+            sampled_images.extend(images)
+        else:
+            sampled = random.sample(images, n_samples_per_class)
+            sampled_images.extend(sampled)
+            logger.debug(f"クラス {class_name} から {len(sampled)} 枚の画像をサンプリングしました")
+
     logger.info(
-        f"Sampled {len(sampled)} images from {len(image_paths)} total images")
-    return sampled
+        f"合計 {len(sampled_images)} 枚の画像をサンプリングしました（{len(class_images)}クラス × 最大{n_samples_per_class}枚）")
+    return sampled_images
 
 
 def extract_plant_name(label: str) -> str:
@@ -446,87 +494,111 @@ def extract_disease_name(label: str) -> str:
     return parts[1] if len(parts) > 1 else "healthy"
 
 
-def calculate_plant_metrics(predicted_labels: list, true_labels: list, raw_responses: list) -> dict:
-    """植物種の分類精度を計算する
-
-    Args:
-        predicted_labels (list): 予測されたラベルのリスト
-        true_labels (list): 正解のラベルのリスト
-        raw_responses (list): モデルの生の応答のリスト
-
-    Returns:
-        dict: 精度指標を含む辞書
+def calculate_plant_metrics(predicted_labels, true_labels, raw_responses, top_k=3):
     """
-    if not predicted_labels or not true_labels or len(predicted_labels) != len(true_labels):
-        logger.error("Invalid input for calculate_plant_metrics")
-        return {'accuracy': 0.0, 'top5_accuracy': 0.0}
+    植物の分類メトリクスを計算します
+    Args:
+        predicted_labels: 予測ラベルのリスト（Top-K予測を含む）
+        true_labels: 正解ラベルのリスト
+        raw_responses: 生の応答テキストのリスト
+        top_k: Top-K精度の計算に使用するK値（デフォルト: 3）
+    Returns:
+        dict: 計算されたメトリクス
+    """
+    total = len(true_labels)
+    if total == 0:
+        return {
+            'accuracy': 0.0,
+            'top_k_accuracy': 0.0,
+            'avg_similarity': 0.0,
+            'confusion_matrix': {},
+            'error_analysis': []
+        }
 
-    correct = 0
-    top5_correct = 0
-    total = len(predicted_labels)
+    # Top-1 accuracy（最も確信度の高い予測のみ）
+    correct = sum(1 for pred, true in zip(predicted_labels, true_labels)
+                  if pred and pred[0] == true)
 
-    for pred, true, response in zip(predicted_labels, true_labels, raw_responses):
-        # 植物種のみを抽出して比較
-        pred_plant = extract_plant_name(pred) if pred else ""
-        true_plant = extract_plant_name(true)
+    # Top-K accuracy（上位K個の予測のいずれかが正解）
+    top_k_correct = sum(1 for preds, true in zip(predicted_labels, true_labels)
+                        if true in preds[:top_k])
 
-        # 通常の精度計算
-        if pred_plant == true_plant:
-            correct += 1
+    # 平均類似度（オプション）
+    avg_similarity = 0.0  # 必要に応じて実装
 
-        # Top-5精度の計算
-        top5_predictions = get_top_k_predictions(response)
-        top5_plants = [extract_plant_name(p[0]) for p in top5_predictions]
-        if true_plant in top5_plants:
-            top5_correct += 1
+    # 混同行列の作成
+    confusion_matrix = {}
 
-    accuracy = correct / total if total > 0 else 0.0
-    top5_accuracy = top5_correct / total if total > 0 else 0.0
+    # エラー分析
+    error_analysis = []
+    for i, (preds, true, response) in enumerate(zip(predicted_labels, true_labels, raw_responses)):
+        if true not in preds[:top_k]:
+            error_analysis.append({
+                'index': i,
+                'true_label': true,
+                'predicted': preds[:top_k],
+                'response': response
+            })
 
     return {
-        'accuracy': accuracy,
-        'top5_accuracy': top5_accuracy
+        'accuracy': correct / total,
+        'top_k_accuracy': top_k_correct / total,
+        'avg_similarity': avg_similarity,
+        'confusion_matrix': confusion_matrix,
+        'error_analysis': error_analysis
     }
 
 
-def calculate_disease_metrics(predicted_labels: list, true_labels: list, raw_responses: list) -> dict:
-    """病気の分類精度を計算する
-
-    Args:
-        predicted_labels (list): 予測されたラベルのリスト
-        true_labels (list): 正解のラベルのリスト
-        raw_responses (list): モデルの生の応答のリスト
-
-    Returns:
-        dict: 精度指標を含む辞書
+def calculate_disease_metrics(predicted_labels, true_labels, raw_responses, top_k=3):
     """
-    if not predicted_labels or not true_labels or len(predicted_labels) != len(true_labels):
-        logger.error("Invalid input for calculate_disease_metrics")
-        return {'accuracy': 0.0, 'top5_accuracy': 0.0}
+    病気の診断メトリクスを計算します
+    Args:
+        predicted_labels: 予測ラベルのリスト（Top-K予測を含む）
+        true_labels: 正解ラベルのリスト
+        raw_responses: 生の応答テキストのリスト
+        top_k: Top-K精度の計算に使用するK値（デフォルト: 3）
+    Returns:
+        dict: 計算されたメトリクス
+    """
+    total = len(true_labels)
+    if total == 0:
+        return {
+            'accuracy': 0.0,
+            'top_k_accuracy': 0.0,
+            'avg_similarity': 0.0,
+            'confusion_matrix': {},
+            'error_analysis': []
+        }
 
-    correct = 0
-    top5_correct = 0
-    total = len(predicted_labels)
+    # Top-1 accuracy（最も確信度の高い予測のみ）
+    correct = sum(1 for pred, true in zip(predicted_labels, true_labels)
+                  if pred and pred[0] == true)
 
-    for pred, true, response in zip(predicted_labels, true_labels, raw_responses):
-        # 病気名のみを抽出して比較
-        pred_disease = extract_disease_name(pred) if pred else ""
-        true_disease = extract_disease_name(true)
+    # Top-K accuracy（上位K個の予測のいずれかが正解）
+    top_k_correct = sum(1 for preds, true in zip(predicted_labels, true_labels)
+                        if true in preds[:top_k])
 
-        # 通常の精度計算
-        if pred_disease == true_disease:
-            correct += 1
+    # 平均類似度（オプション）
+    avg_similarity = 0.0  # 必要に応じて実装
 
-        # Top-5精度の計算
-        top5_predictions = get_top_k_predictions(response)
-        top5_diseases = [extract_disease_name(p[0]) for p in top5_predictions]
-        if true_disease in top5_diseases:
-            top5_correct += 1
+    # 混同行列の作成
+    confusion_matrix = {}
 
-    accuracy = correct / total if total > 0 else 0.0
-    top5_accuracy = top5_correct / total if total > 0 else 0.0
+    # エラー分析
+    error_analysis = []
+    for i, (preds, true, response) in enumerate(zip(predicted_labels, true_labels, raw_responses)):
+        if true not in preds[:top_k]:
+            error_analysis.append({
+                'index': i,
+                'true_label': true,
+                'predicted': preds[:top_k],
+                'response': response
+            })
 
     return {
-        'accuracy': accuracy,
-        'top5_accuracy': top5_accuracy
+        'accuracy': correct / total,
+        'top_k_accuracy': top_k_correct / total,
+        'avg_similarity': avg_similarity,
+        'confusion_matrix': confusion_matrix,
+        'error_analysis': error_analysis
     }
