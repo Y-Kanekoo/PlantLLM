@@ -25,13 +25,24 @@ PlantLLM は、植物の画像から種類と健康状態を診断する Web ア
 GEMINI_API_KEY=your_gemini_api_key
 ```
 
-### 2. Backend の起動
+### 2. Python 環境
+
+Python 3.12 を推奨します（3.14 は一部依存でビルド失敗します）。
+
+```bash
+/opt/homebrew/opt/python@3.12/bin/python3.12 -m venv venv312
+source venv312/bin/activate
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+### 3. Backend の起動
 
 ```bash
 python -m uvicorn app_simple:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-### 3. Frontend (開発モード)
+### 4. Frontend (開発モード)
 
 ```bash
 cd frontend
@@ -41,7 +52,7 @@ npm run dev
 
 Vite の開発サーバは `http://localhost:5173` で起動します。
 
-### 4. Frontend (本番ビルド)
+### 5. Frontend (本番ビルド)
 
 ```bash
 cd frontend
