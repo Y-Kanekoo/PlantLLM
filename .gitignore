@@ -24,3 +24,4 @@ mobile/.expo-shared/
 
 # OS
 .DS_Store
+.vscode/
