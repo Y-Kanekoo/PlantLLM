@@ -111,6 +111,12 @@ textarea {
   color: var(--accent-strong);
 }
 
+.hero-last-run {
+  margin-top: 16px;
+  font-size: 0.85rem;
+  color: var(--subtle);
+}
+
 .hero-card {
   background: var(--surface);
   padding: 28px;
@@ -192,6 +198,20 @@ textarea {
   gap: 12px;
 }
 
+.queue-meta {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.85rem;
+  color: var(--subtle);
+  flex-wrap: wrap;
+}
+
+.queue-meta .ghost {
+  padding: 6px 12px;
+}
+
 .queue-item {
   background: var(--surface-alt);
   border-radius: var(--radius-sm);
@@ -262,6 +282,11 @@ textarea {
   border-radius: var(--radius-sm);
   color: #8a4b15;
   font-size: 0.9rem;
+}
+
+.helper-text {
+  font-size: 0.8rem;
+  color: var(--subtle);
 }
 
 .content-grid {

@@ -7,10 +7,12 @@ import json
 from datetime import datetime
 from difflib import get_close_matches
 from utils import (
-    load_image, get_dataset_labels, save_results_by_type,
-    calculate_metrics, logger, normalize_path,
-    safe_listdir, sample_images, calculate_plant_metrics,
-    calculate_disease_metrics
+    load_image,
+    get_dataset_labels,
+    logger,
+    normalize_path,
+    safe_listdir,
+    sample_images,
 )
 import google.generativeai as genai
 from time import sleep
@@ -18,7 +20,7 @@ import threading
 import time
 
 # 基本設定
-BASE_DATASET_PATH = normalize_path("dataset/PlantVillage_color")
+BASE_DATASET_PATH = normalize_path("dataset/PlantVillage_3Variants/color")
 OUTPUT_DIR = normalize_path("results/zero_shot")
 BATCH_SIZE = 10  # Gemini 1.5 Flash の制限に対応（15 RPM）
 WAIT_TIME = 5    # 5秒間隔で制限内に収める

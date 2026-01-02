@@ -121,21 +121,28 @@ def process_single_image(args):
             logger.debug(f"Model response: {response_text}")
 
             # 応答から予測ラベルと確信度を抽出
-            predicted_label = None
+            plant_name = None
+            condition = None
             confidence = 0.0
-            features = ""
+            features = []
 
-            for line in response_text.split('\n'):
-                if '選択したラベル:' in line:
-                    predicted_label = line.split(':')[1].strip()
-                elif '確信度:' in line:
+            for raw_line in response_text.split('\n'):
+                line = raw_line.strip()
+                if line.startswith('植物名:'):
+                    plant_name = line.split(':', 1)[1].strip()
+                elif line.startswith('状態:'):
+                    condition = line.split(':', 1)[1].strip()
+                elif line.startswith('確信度:'):
                     try:
-                        confidence = float(line.split(
-                            ':')[1].strip().replace('%', ''))
+                        confidence = float(line.split(':', 1)[1].strip().replace('%', ''))
                     except ValueError:
                         confidence = 0.0
-                elif '特徴:' in line:
-                    features = line.split(':')[1].strip()
+                elif line.startswith('- '):
+                    features.append(line[2:].strip())
+
+            predicted_label = None
+            if plant_name and condition:
+                predicted_label = f"{plant_name} - {condition}"
 
             process_time = time.time() - start_time
 
@@ -144,7 +151,7 @@ def process_single_image(args):
                 'true_label': true_label,
                 'predicted_label': predicted_label,
                 'confidence': confidence,
-                'features': features,
+                'features': '; '.join(features),
                 'process_time': process_time,
                 'raw_response': response_text
             }
@@ -206,7 +213,7 @@ def process_dataset() -> dict:
     logger.info(f"Found {len(image_data)} total images")
 
     # ランダムサンプリング
-    sampled_data = sample_images(image_data, n_samples=N_SAMPLES)
+    sampled_data = sample_images(image_data, n_samples_per_class=N_SAMPLES)
     logger.info(f"Sampled {len(sampled_data)} images for processing")
 
     # 並列処理で画像を分類
@@ -223,7 +230,7 @@ def process_dataset() -> dict:
 
     # 植物種の精度を計算
     plant_metrics = calculate_plant_metrics(
-        [extract_plant_name(r['predicted_label'])
+        [[extract_plant_name(r['predicted_label'])]
             for r in results if r['predicted_label'] is not None],
         [extract_plant_name(r['true_label'])
             for r in results if r['predicted_label'] is not None],
@@ -232,7 +239,7 @@ def process_dataset() -> dict:
 
     # 病気の精度を計算
     disease_metrics = calculate_disease_metrics(
-        [r['predicted_label']
+        [[r['predicted_label']]
             for r in results if r['predicted_label'] is not None],
         [r['true_label']
             for r in results if r['predicted_label'] is not None],

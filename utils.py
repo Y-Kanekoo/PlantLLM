@@ -323,6 +323,12 @@ def calculate_metrics(predictions: list, true_labels: list, raw_responses: list 
                              'top5_correct': 0, 'top5_accuracy': 0.0}
                      for label in STANDARD_LABELS}
 
+    for pred_label, true_label in zip(normalized_predictions, normalized_true_labels):
+        if true_label in label_metrics:
+            label_metrics[true_label]['total'] += 1
+            if pred_label == true_label:
+                label_metrics[true_label]['correct'] += 1
+
     # 各ラベルのTop-N精度を計算
     if raw_responses:
         for true_label, response_text in zip(normalized_true_labels, raw_responses):

@@ -1,13 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
+import UploadCard from "./components/UploadCard.jsx";
+import ResultsPanel from "./components/ResultsPanel.jsx";
+import HistoryPanel from "./components/HistoryPanel.jsx";
+import EntryDrawer from "./components/EntryDrawer.jsx";
+import { formatDateTime } from "./utils/format.js";
 
 const API_HEADERS = { "Content-Type": "application/json" };
-
-const formatDateTime = (value) => {
-  if (!value) return "";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString("ja-JP");
-};
 
 const toPreviewItem = (file) => ({
   id: `${file.name}-${file.size}-${file.lastModified}-${Math.random()}`,
@@ -40,8 +38,18 @@ export default function App() {
   }, [queue]);
 
   const totalQueued = queue.length;
+  const queuedSize = queue.reduce((sum, item) => sum + item.file.size, 0);
 
   const latestResults = useMemo(() => results.slice(0, 8), [results]);
+  const averageTime = useMemo(() => {
+    if (!results.length) return null;
+    const total = results.reduce(
+      (sum, item) => sum + (item.processing_time || 0),
+      0
+    );
+    return (total / results.length).toFixed(2);
+  }, [results]);
+  const lastRunAt = results[0]?.timestamp;
 
   const loadModels = async () => {
     try {
@@ -228,228 +236,62 @@ export default function App() {
               <strong>履歴管理</strong>
               <span>SQLiteで自動保存</span>
             </div>
-          </div>
-        </div>
-
-        <div className="hero-card">
-          <div className="card-header">
-            <h2>画像を診断する</h2>
-            <p>ドラッグ&ドロップ、複数枚まとめてOK。</p>
-          </div>
-          <div
-            className={`drop-zone ${dragActive ? "active" : ""}`}
-            onDragOver={(event) => {
-              event.preventDefault();
-              setDragActive(true);
-            }}
-            onDragLeave={() => setDragActive(false)}
-            onDrop={handleDrop}
-          >
             <div>
-              <strong>画像をここにドロップ</strong>
-              <span>またはファイルを選択</span>
+              <strong>平均処理時間</strong>
+              <span>{averageTime ? `${averageTime}s` : "計測中"}</span>
             </div>
-            <input
-              type="file"
-              accept="image/*"
-              multiple
-              onChange={(event) => handleFiles(event.target.files)}
-            />
           </div>
-
-          <div className="form-row">
-            <label htmlFor="model-select">使用モデル</label>
-            <select
-              id="model-select"
-              value={selectedModel}
-              onChange={(event) => setSelectedModel(event.target.value)}
-            >
-              {models.map((model) => (
-                <option key={model.name} value={model.name}>
-                  {model.description}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div className="queue-grid">
-            {queue.map((item) => (
-              <div className="queue-item" key={item.id}>
-                <img src={item.preview} alt="preview" />
-                <button
-                  type="button"
-                  className="ghost"
-                  onClick={() => removeFromQueue(item.id)}
-                >
-                  削除
-                </button>
-              </div>
-            ))}
-          </div>
-
-          <button
-            type="button"
-            className="primary"
-            onClick={diagnoseQueue}
-            disabled={!queue.length || status.uploading}
-          >
-            {status.uploading
-              ? `診断中 ${status.progress}%`
-              : `診断開始 (${totalQueued}枚)`}
-          </button>
-
-          {status.uploading ? (
-            <div className="progress">
-              <span style={{ width: `${status.progress}%` }} />
+          {lastRunAt ? (
+            <div className="hero-last-run">
+              最終診断: {formatDateTime(lastRunAt)}
             </div>
           ) : null}
-
-          {error ? <div className="error-card">{error}</div> : null}
         </div>
+
+        <UploadCard
+          dragActive={dragActive}
+          onDrop={handleDrop}
+          onDragOver={(event) => {
+            event.preventDefault();
+            setDragActive(true);
+          }}
+          onDragLeave={() => setDragActive(false)}
+          onFiles={handleFiles}
+          models={models}
+          selectedModel={selectedModel}
+          onModelChange={setSelectedModel}
+          queue={queue}
+          queuedSize={queuedSize}
+          totalQueued={totalQueued}
+          onRemoveQueue={removeFromQueue}
+          onClearQueue={clearQueue}
+          onDiagnose={diagnoseQueue}
+          status={status}
+          error={error}
+        />
       </header>
 
       <main className="content-grid">
-        <section className="panel">
-          <div className="panel-header">
-            <h3>最新の診断結果</h3>
-            <span>{results.length} 件</span>
-          </div>
-
-          <div className="results-list">
-            {latestResults.length === 0 ? (
-              <p className="muted">まだ結果がありません。</p>
-            ) : (
-              latestResults.map((result, index) => (
-                <article
-                  className="result-card"
-                  key={`${result.entry_id}-${index}`}
-                  style={{ animationDelay: `${index * 0.05}s` }}
-                >
-                  <div className="result-image">
-                    <img src={result.image?.url} alt="診断画像" />
-                    {result.from_cache ? (
-                      <span className="pill">cache</span>
-                    ) : null}
-                  </div>
-                  <div className="result-body">
-                    <div className="result-meta">
-                      <span>{formatDateTime(result.timestamp)}</span>
-                      <span>{result.model?.description}</span>
-                    </div>
-                    <pre>{result.diagnosis}</pre>
-                    <div className="result-footer">
-                      <span>処理時間 {result.processing_time}s</span>
-                      <button
-                        type="button"
-                        className="ghost"
-                        onClick={() => openHistoryEntry(result.entry_id)}
-                      >
-                        詳細を見る
-                      </button>
-                    </div>
-                  </div>
-                </article>
-              ))
-            )}
-          </div>
-        </section>
-
-        <section className="panel">
-          <div className="panel-header">
-            <h3>診断履歴</h3>
-            <button type="button" className="ghost" onClick={clearHistory}>
-              履歴を削除
-            </button>
-          </div>
-          <div className="history-list">
-            {history.length === 0 ? (
-              <p className="muted">履歴がまだありません。</p>
-            ) : (
-              history.map((entry, index) => (
-                <button
-                  type="button"
-                  className="history-item"
-                  key={entry.id}
-                  style={{ animationDelay: `${index * 0.03}s` }}
-                  onClick={() => openHistoryEntry(entry.id)}
-                >
-                  <img src={entry.image?.url} alt="診断" />
-                  <div>
-                    <strong>{formatDateTime(entry.timestamp)}</strong>
-                    <p>{entry.diagnosis}</p>
-                    <span>
-                      {entry.model?.description} · {entry.processing_time}s
-                    </span>
-                  </div>
-                </button>
-              ))
-            )}
-          </div>
-        </section>
+        <ResultsPanel
+          results={latestResults}
+          totalCount={results.length}
+          onOpenEntry={openHistoryEntry}
+        />
+        <HistoryPanel
+          history={history}
+          onOpenEntry={openHistoryEntry}
+          onClear={clearHistory}
+        />
       </main>
 
-      {activeEntry ? (
-        <div className="drawer" role="dialog" aria-modal="true">
-          <div className="drawer-content">
-            <button
-              type="button"
-              className="drawer-close"
-              onClick={() => setActiveEntry(null)}
-            >
-              ×
-            </button>
-            <div className="drawer-grid">
-              <div>
-                <img
-                  className="drawer-image"
-                  src={activeEntry.image?.url}
-                  alt="診断画像"
-                />
-                <div className="drawer-meta">
-                  <strong>{activeEntry.model?.description}</strong>
-                  <span>{formatDateTime(activeEntry.timestamp)}</span>
-                  <span>処理時間 {activeEntry.processing_time}s</span>
-                </div>
-                <pre className="drawer-diagnosis">{activeEntry.diagnosis}</pre>
-              </div>
-              <div className="drawer-chat">
-                <h4>追加で質問する</h4>
-                <div className="chat-window">
-                  {(activeEntry.chat || []).length === 0 ? (
-                    <p className="muted">まだチャット履歴がありません。</p>
-                  ) : (
-                    (activeEntry.chat || []).map((chat, index) => (
-                      <div
-                        key={`${chat.timestamp}-${index}`}
-                        className={`chat-bubble ${chat.role}`}
-                      >
-                        <span>{chat.message}</span>
-                        <time>{formatDateTime(chat.timestamp)}</time>
-                      </div>
-                    ))
-                  )}
-                </div>
-                <div className="chat-input">
-                  <textarea
-                    rows="3"
-                    placeholder="気になる点や症状を入力..."
-                    value={chatInput}
-                    onChange={(event) => setChatInput(event.target.value)}
-                  />
-                  <button
-                    type="button"
-                    className="primary"
-                    disabled={chatSending || !chatInput.trim()}
-                    onClick={sendChatMessage}
-                  >
-                    {chatSending ? "送信中..." : "送信"}
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      ) : null}
+      <EntryDrawer
+        entry={activeEntry}
+        onClose={() => setActiveEntry(null)}
+        chatInput={chatInput}
+        onChatInputChange={setChatInput}
+        onSendChat={sendChatMessage}
+        chatSending={chatSending}
+      />
     </div>
   );
 }
