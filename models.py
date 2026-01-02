@@ -1,50 +1,57 @@
-from sqlalchemy import Column, Integer, String, Float, DateTime, Text
-from sqlalchemy.ext.declarative import declarative_base
 from datetime import datetime
+
+from sqlalchemy import Column, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import relationship
 
 # SQLAlchemyのベースクラスを作成
 Base = declarative_base()
 
 
 class Diagnosis(Base):
-    """
-    病害診断結果を保存するテーブル
+    """診断結果の永続化テーブル"""
 
-    Attributes:
-        id (int): 主キー
-        timestamp (datetime): 診断実行時刻
-        image_path (str): 診断対象画像のパス
-        diagnosis (str): 診断結果（病名）
-        confidence (float): 診断の確信度
-        treatment (str): 推奨される治療法
-        prevention (str): 予防策
-        symptoms (str): 症状の説明
-    """
-    __tablename__ = 'diagnoses'
+    __tablename__ = "diagnoses"
 
     id = Column(Integer, primary_key=True, index=True)
-    timestamp = Column(DateTime, default=datetime.utcnow)
-    image_path = Column(String)
-    diagnosis = Column(String)
-    confidence = Column(Float)
-    treatment = Column(Text)
-    prevention = Column(Text)
-    symptoms = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    image_path = Column(String, nullable=False)
+    image_hash = Column(String, index=True)
+    mime_type = Column(String)
+    file_size = Column(Integer)
+    diagnosis_text = Column(Text, nullable=False)
+    model_name = Column(String)
+    model_description = Column(String)
+    processing_time = Column(Float)
+
+    chat_messages = relationship(
+        "ChatMessage",
+        back_populates="diagnosis",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
+
+class ChatMessage(Base):
+    """診断に紐づくチャット履歴"""
+
+    __tablename__ = "chat_messages"
+
+    id = Column(Integer, primary_key=True, index=True)
+    diagnosis_id = Column(Integer, ForeignKey("diagnoses.id", ondelete="CASCADE"))
+    role = Column(String, nullable=False)
+    message = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    diagnosis = relationship("Diagnosis", back_populates="chat_messages")
 
 
 class Feedback(Base):
-    """
-    ユーザーからのフィードバックを保存するテーブル
+    """任意のフィードバックを保存するテーブル"""
 
-    Attributes:
-        id (int): 主キー
-        diagnosis_id (int): 診断結果のID（外部キー）
-        user_feedback (str): ユーザーからのフィードバック内容
-        timestamp (datetime): フィードバック送信時刻
-    """
-    __tablename__ = 'feedbacks'
+    __tablename__ = "feedbacks"
 
     id = Column(Integer, primary_key=True, index=True)
-    diagnosis_id = Column(Integer)
-    user_feedback = Column(Text)
-    timestamp = Column(DateTime, default=datetime.utcnow)
+    diagnosis_id = Column(Integer, ForeignKey("diagnoses.id", ondelete="SET NULL"))
+    user_feedback = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)

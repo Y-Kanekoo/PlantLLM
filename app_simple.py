@@ -1,48 +1,46 @@
-import os
-import io
-import time
 import asyncio
 import hashlib
-import json
-from typing import Dict, Any, List, Optional
-from pathlib import Path
-from functools import lru_cache
-from datetime import datetime
-from tenacity import retry, stop_after_attempt, wait_exponential
-from PIL import Image
-import google.generativeai as genai
-from fastapi import FastAPI, UploadFile, Request, WebSocket, BackgroundTasks, HTTPException
-from fastapi.responses import HTMLResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
+import io
 import logging
-from fastapi.middleware.cors import CORSMiddleware
-import uvicorn
-from dotenv import load_dotenv
-from pydantic import BaseModel
+import os
+import time
+import uuid
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
-# 環境変数の読み込み
+import google.generativeai as genai
+from dotenv import load_dotenv
+from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
+from sqlalchemy import delete, select
+from sqlalchemy.ext.asyncio import AsyncSession
+from PIL import Image
+
+from database import get_db, init_db
+from models import ChatMessage, Diagnosis
+
 load_dotenv()
 
-# ロギングの設定
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
 
-# FastAPIアプリケーションの初期化
+APP_TITLE = "Plant Disease Diagnosis System"
+APP_DESCRIPTION = "植物の種類と病気の有無を診断するAIシステム"
+APP_VERSION = "3.0.0"
+
 app = FastAPI(
-    title="Plant Disease Diagnosis System",
-    description="植物の種類と病気の有無を診断するAIシステム",
-    version="2.0.0"
+    title=APP_TITLE,
+    description=APP_DESCRIPTION,
+    version=APP_VERSION,
 )
 
-# テンプレートとスタティックファイルの設定
-templates = Jinja2Templates(directory="templates")
-app.mount("/static", StaticFiles(directory="static"), name="static")
-
-# CORSミドルウェアの設定
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -51,686 +49,571 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 基本設定
-MAX_IMAGE_SIZE = 1024
-ALLOWED_MIME_TYPES = {'image/jpeg', 'image/png', 'image/gif'}
+BASE_DIR = Path(__file__).resolve().parent
+UPLOAD_DIR = BASE_DIR / "uploads"
+UPLOAD_DIR.mkdir(exist_ok=True)
 
-# モデルの設定
+FRONTEND_DIST = BASE_DIR / "frontend" / "dist"
+FRONTEND_INDEX = FRONTEND_DIST / "index.html"
+FRONTEND_ASSETS = FRONTEND_DIST / "assets"
+
+if FRONTEND_ASSETS.exists():
+    app.mount("/assets", StaticFiles(directory=str(FRONTEND_ASSETS)), name="assets")
+
+app.mount("/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
+
+MAX_IMAGE_SIZE = 1024
+MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024
+ALLOWED_MIME_TYPES = {"image/jpeg", "image/png", "image/gif"}
+
+DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "gemini-2.0-flash-exp")
+CHAT_MODEL = os.getenv("CHAT_MODEL", "gemini-1.5-pro")
+
 MODELS_CONFIG = [
     {
-        'name': 'gemini-2.0-flash-exp',
-        'description': 'Gemini 2.0 Flash',
-        'retry_count': 3,
-        'wait_time': 4,
-        'quota_limit': 60
+        "name": "gemini-2.0-flash-exp",
+        "description": "Gemini 2.0 Flash",
+        "retry_count": 3,
+        "wait_time": 4,
+        "quota_limit": 60,
     },
     {
-        'name': 'gemini-1.5-flash',
-        'description': 'Gemini 1.5 Flash',
-        'retry_count': 3,
-        'wait_time': 3,
-        'quota_limit': 60
+        "name": "gemini-1.5-flash",
+        "description": "Gemini 1.5 Flash",
+        "retry_count": 3,
+        "wait_time": 3,
+        "quota_limit": 60,
     },
     {
-        'name': 'gemini-1.5-flash-8b',
-        'description': 'Gemini 1.5 Flash-8B',
-        'retry_count': 3,
-        'wait_time': 2,
-        'quota_limit': 60
+        "name": "gemini-1.5-flash-8b",
+        "description": "Gemini 1.5 Flash-8B",
+        "retry_count": 3,
+        "wait_time": 2,
+        "quota_limit": 60,
     },
     {
-        'name': 'gemini-1.5-pro',
-        'description': 'Gemini 1.5 Pro',
-        'retry_count': 3,
-        'wait_time': 2,
-        'quota_limit': 45
-    }
+        "name": "gemini-1.5-pro",
+        "description": "Gemini 1.5 Pro",
+        "retry_count": 3,
+        "wait_time": 2,
+        "quota_limit": 45,
+    },
 ]
-
-# レート制限の統合管理
 
 
 class UnifiedRateLimiter:
     def __init__(self):
         self.model_limiters = {}
-        self.global_requests = []
-        self.global_limit = 30  # グローバルな1分あたりの制限
+        self.global_requests: List[float] = []
+        self.global_limit = 30
         self.time_window = 60
 
-    def initialize_model(self, model_name: str, quota_limit: int):
-        """モデルごとのレート制限を初期化"""
+    def initialize_model(self, model_name: str, quota_limit: int) -> None:
         self.model_limiters[model_name] = {
-            'quota_limit': quota_limit,
-            'requests': [],
-            'reset_time': None,
-            'total_requests': 0,
-            'error_count': 0
+            "quota_limit": quota_limit,
+            "requests": [],
+            "reset_time": None,
+            "total_requests": 0,
+            "error_count": 0,
         }
 
-    def is_allowed(self, model_name: str = None) -> bool:
+    def allow(self, model_name: str) -> bool:
         now = time.time()
-
-        # グローバル制限のチェック
-        self.global_requests = [
-            req for req in self.global_requests if now - req < self.time_window]
+        self.global_requests = [req for req in self.global_requests if now - req < self.time_window]
         if len(self.global_requests) >= self.global_limit:
             logger.warning("Global rate limit reached")
             return False
 
-        # モデル固有の制限をチェック
-        if model_name and model_name in self.model_limiters:
-            limiter = self.model_limiters[model_name]
-
-            if limiter['reset_time'] and now < limiter['reset_time']:
-                logger.warning(f"{model_name}: Still in cooldown period")
+        limiter = self.model_limiters.get(model_name)
+        if limiter:
+            if limiter["reset_time"] and now < limiter["reset_time"]:
+                logger.warning("%s: still in cooldown", model_name)
                 return False
 
-            limiter['requests'] = [req for req in limiter['requests']
-                                   if now - req < self.time_window]
-            if len(limiter['requests']) >= limiter['quota_limit']:
-                limiter['reset_time'] = now + self.time_window
-                logger.warning(
-                    f"{model_name}: Model-specific rate limit reached")
+            limiter["requests"] = [req for req in limiter["requests"] if now - req < self.time_window]
+            if len(limiter["requests"]) >= limiter["quota_limit"]:
+                limiter["reset_time"] = now + self.time_window
+                logger.warning("%s: model rate limit reached", model_name)
                 return False
 
-            limiter['requests'].append(now)
-            limiter['total_requests'] += 1
+            limiter["requests"].append(now)
+            limiter["total_requests"] += 1
 
         self.global_requests.append(now)
         return True
 
-    def record_error(self, model_name: str, error: Exception):
-        """エラーを記録し、必要に応じてクールダウンを設定"""
-        if model_name in self.model_limiters:
-            limiter = self.model_limiters[model_name]
-            limiter['error_count'] += 1
+    def record_error(self, model_name: str, error: Exception) -> None:
+        limiter = self.model_limiters.get(model_name)
+        if not limiter:
+            return
+        limiter["error_count"] += 1
+        if "429" in str(error):
+            limiter["reset_time"] = time.time() + 60
 
-            if "429" in str(error):
-                limiter['reset_time'] = time.time() + 60
-                logger.warning(
-                    f"{model_name}: API quota exceeded, cooling down")
-
-    def get_stats(self, model_name: str = None):
-        """使用統計を取得"""
+    def get_stats(self, model_name: Optional[str] = None) -> Dict[str, Any]:
         if model_name and model_name in self.model_limiters:
             limiter = self.model_limiters[model_name]
             return {
-                'total_requests': limiter['total_requests'],
-                'error_count': limiter['error_count'],
-                'current_requests': len(limiter['requests']),
-                'quota_limit': limiter['quota_limit'],
-                'is_limited': bool(limiter['reset_time'] and time.time() < limiter['reset_time'])
+                "total_requests": limiter["total_requests"],
+                "error_count": limiter["error_count"],
+                "current_requests": len(limiter["requests"]),
+                "quota_limit": limiter["quota_limit"],
+                "is_limited": bool(
+                    limiter["reset_time"] and time.time() < limiter["reset_time"]
+                ),
             }
         return {
-            'global_requests': len(self.global_requests),
-            'global_limit': self.global_limit
+            "global_requests": len(self.global_requests),
+            "global_limit": self.global_limit,
         }
 
 
-# 統合されたレート制限マネージャーの初期化
 rate_manager = UnifiedRateLimiter()
 for config in MODELS_CONFIG:
-    rate_manager.initialize_model(config['name'], config['quota_limit'])
-
-# 画像のハッシュ計算
+    rate_manager.initialize_model(config["name"], config["quota_limit"])
 
 
-def calculate_image_hash(image_bytes):
+def calculate_image_hash(image_bytes: bytes) -> str:
     return hashlib.md5(image_bytes).hexdigest()
 
-# 診断結果のキャッシュ
 
-
-@lru_cache(maxsize=100)
-def get_cached_diagnosis(image_hash):
-    return None  # キャッシュミスの場合はNone
-
-# リトライ付きの画像処理
-
-
-@retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=2, min=4, max=20)
-)
-async def process_image_with_retry(model, prompt, image):
-    try:
-        response = await model.generate_content_async([prompt, image])
-        return response
-    except Exception as e:
-        logger.error(f"Error processing image with {model}: {str(e)}")
-        if "429" in str(e):
-            logger.warning(
-                "API quota exceeded, waiting longer before retry...")
-            await asyncio.sleep(10)
-        raise
+async def process_image_with_retry(
+    model, prompt: str, image: Dict[str, Any], retries: int = 3
+) -> Any:
+    attempt = 0
+    while attempt < retries:
+        try:
+            return await model.generate_content_async([prompt, image])
+        except Exception as exc:
+            attempt += 1
+            if attempt >= retries:
+                raise
+            if "429" in str(exc):
+                await asyncio.sleep(8)
+            else:
+                await asyncio.sleep(2)
 
 
 def process_image(image_data: bytes, mime_type: str) -> Dict[str, Any]:
-    """画像の前処理を行う関数"""
     try:
-        # 画像をPILで開く
         image = Image.open(io.BytesIO(image_data))
-
-        # サイズの最適化
-        if max(image.size) > MAX_IMAGE_SIZE:
-            ratio = MAX_IMAGE_SIZE / max(image.size)
+        max_side = max(image.size)
+        if max_side > MAX_IMAGE_SIZE:
+            ratio = MAX_IMAGE_SIZE / max_side
             new_size = tuple(int(dim * ratio) for dim in image.size)
-            image = image.resize(new_size, Image.Resampling.LANCZOS)
+            resample = (
+                Image.Resampling.LANCZOS
+                if hasattr(Image, "Resampling")
+                else Image.LANCZOS
+            )
+            image = image.resize(new_size, resample)
 
-        # 画像をバイトに変換
         buffer = io.BytesIO()
-        image.save(buffer, format=image.format or 'JPEG')
-        processed_data = buffer.getvalue()
-
-        return {
-            'mime_type': mime_type,
-            'data': processed_data
-        }
-    except Exception as e:
-        logger.error(f"Image processing failed: {str(e)}")
-        raise ValueError(f"画像の処理に失敗しました: {str(e)}")
+        image.save(buffer, format=image.format or "JPEG")
+        return {"mime_type": mime_type, "data": buffer.getvalue()}
+    except Exception as exc:
+        logger.error("Image processing failed: %s", exc)
+        raise ValueError(f"画像の処理に失敗しました: {exc}")
 
 
-# Gemini APIの設定
-try:
-    # 新しいAPIキーを直接設定
-    API_KEY = "..."
-    genai.configure(api_key=API_KEY)
-    logger.info("Successfully configured Gemini API with new key")
-except Exception as e:
-    logger.error(f"Failed to initialize Gemini API: {str(e)}")
-    raise
-
-# アップロードディレクトリの作成
-UPLOAD_DIR = Path("uploads")
-UPLOAD_DIR.mkdir(exist_ok=True)
-
-# 診断用のプロンプト
-DIAGNOSIS_PROMPT = """
-画像の植物を分析し、以下の3点について簡潔に回答してください：
-
-1. 植物の種類：
-2. 健康状態：[健康/病気の疑い]
-3. 所見：
-
-注意：
-- 植物種が不明な場合は「不明」と記載
-- 健康状態が判断できない場合は「判断不可」と記載
-- 所見は観察された特徴を簡潔に記載
-"""
-
-# モデルの初期化
+def get_extension(content_type: str, filename: str) -> str:
+    mime_map = {
+        "image/jpeg": ".jpg",
+        "image/png": ".png",
+        "image/gif": ".gif",
+    }
+    if content_type in mime_map:
+        return mime_map[content_type]
+    return Path(filename).suffix or ".jpg"
 
 
-def initialize_model(model_config):
+class ChatRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=2000)
+
+
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+if not GEMINI_API_KEY:
+    logger.warning("GEMINI_API_KEY is not set; diagnosis will fail")
+else:
+    genai.configure(api_key=GEMINI_API_KEY)
+
+
+def initialize_model(model_config: Dict[str, Any]):
     try:
-        model = genai.GenerativeModel(model_config['name'])
-        logger.info(f"Initialized {model_config['description']}")
+        model = genai.GenerativeModel(model_config["name"])
+        logger.info("Initialized %s", model_config["description"])
         return model
-    except Exception as e:
-        logger.warning(
-            f"Failed to initialize {model_config['description']}: {str(e)}")
+    except Exception as exc:
+        logger.warning("Failed to initialize %s: %s", model_config["description"], exc)
         return None
 
 
-# 利用可能なモデルのリストを取得
 available_models = []
 for config in MODELS_CONFIG:
     model = initialize_model(config)
     if model:
-        available_models.append({
-            'model': model,
-            'config': config
-        })
+        available_models.append({"model": model, "config": config})
 
 if not available_models:
     logger.error("No models available")
-    raise RuntimeError("利用可能なモデルがありません")
-
-logger.info(f"Initialized {len(available_models)} models successfully")
-
-# API使用状況のモニタリング
 
 
-class APIMonitor:
-    def __init__(self):
-        self.request_count = 0
-        self.error_count = 0
-        self.last_error_time = None
-        self.quota_reset_time = None
+def resolve_models(preferred: Optional[str]) -> List[Dict[str, Any]]:
+    if preferred:
+        for model_info in available_models:
+            if model_info["config"]["name"] == preferred:
+                return [model_info]
+        return []
 
-    def record_request(self):
-        self.request_count += 1
+    default_first = []
+    fallback = []
+    for model_info in available_models:
+        if model_info["config"]["name"] == DEFAULT_MODEL:
+            default_first.append(model_info)
+        else:
+            fallback.append(model_info)
+    return default_first + fallback
 
-    def record_error(self, error):
-        self.error_count += 1
-        self.last_error_time = time.time()
-        if "429" in str(error):
-            self.quota_reset_time = time.time() + 3600  # 1時間後にリセット想定
+
+def format_diagnosis_response(entry: Diagnosis, used_cache: bool) -> Dict[str, Any]:
+    return {
+        "success": True,
+        "entry_id": entry.id,
+        "diagnosis": entry.diagnosis_text,
+        "model": {
+            "name": entry.model_name,
+            "description": entry.model_description,
+        },
+        "processing_time": entry.processing_time,
+        "timestamp": entry.created_at.isoformat(),
+        "image": {
+            "url": entry.image_path,
+            "mime_type": entry.mime_type,
+            "file_size": entry.file_size,
+        },
+        "from_cache": used_cache,
+    }
 
 
-api_monitor = APIMonitor()
+DIAGNOSIS_PROMPT = """
+画像の植物を観察し、以下の形式で日本語回答してください。
 
-# モデルの状態を取得するエンドポイントを追加
+【植物の種類】
+- 植物名:
+- 学名(可能なら):
+- 確信度(%):
+
+【健康状態】
+- 判定: 健康 / 病気の疑い / 判断不可
+- 主な所見:
+- 症状の深刻度: 低 / 中 / 高
+
+【所見の詳細】
+- 葉の特徴:
+- 斑点・変色:
+- 形状の変化:
+- その他の観察:
+
+【対処】
+- すぐにできる対策:
+- 予防のポイント:
+
+注意:
+- 画像が不鮮明な場合はその旨を記載
+- 判断が難しい場合は複数候補を提示
+- 確信度は必ず0-100で記載
+"""
+
+
+@app.on_event("startup")
+async def on_startup() -> None:
+    await init_db()
+
+
+@app.get("/", include_in_schema=False)
+async def serve_root() -> HTMLResponse:
+    if FRONTEND_INDEX.exists():
+        return FileResponse(FRONTEND_INDEX)
+    return HTMLResponse(
+        "<h1>PlantLLM</h1><p>frontend/dist が見つかりません。frontend をビルドしてください。</p>",
+        status_code=200,
+    )
 
 
 @app.get("/model-status")
-async def get_model_status():
-    """各モデルの使用状況を返す"""
+async def get_model_status() -> Dict[str, Any]:
     return {
         model_name: limiter.get_stats()
         for model_name, limiter in rate_manager.model_limiters.items()
     }
 
 
-async def process_image_with_models(prompt, image):
+@app.get("/models")
+async def get_models() -> Dict[str, Any]:
+    return {
+        "default": DEFAULT_MODEL,
+        "models": [
+            {
+                "name": config["name"],
+                "description": config["description"],
+            }
+            for config in MODELS_CONFIG
+        ],
+    }
+
+
+async def run_diagnosis(
+    prompt: str, image: Dict[str, Any], model_name: Optional[str]
+) -> Any:
+    candidates = resolve_models(model_name)
+    if model_name and not candidates:
+        raise HTTPException(status_code=400, detail="指定されたモデルが見つかりません")
+    if not candidates:
+        raise HTTPException(status_code=500, detail="利用可能なモデルがありません")
+
     last_error = None
-    api_monitor.record_request()
-
-    for model_info in available_models:
-        model = model_info['model']
-        config = model_info['config']
-
-        # モデル固有のレート制限をチェック
-        if not rate_manager.is_allowed(config['name']):
-            logger.warning(
-                f"Rate limit reached for {config['description']}, trying next model...")
+    for model_info in candidates:
+        config = model_info["config"]
+        if not rate_manager.allow(config["name"]):
             continue
 
         try:
-            logger.info(f"Trying {config['description']}")
-            response = await process_image_with_retry(model, prompt, image)
-            logger.info(f"Success with {config['description']}")
-            response.model_info = config['description']
+            response = await process_image_with_retry(
+                model_info["model"],
+                prompt,
+                image,
+                retries=config["retry_count"],
+            )
+            response.model_info = config["description"]
+            response.model_name = config["name"]
             return response
-        except Exception as e:
-            last_error = e
-            api_monitor.record_error(e)
-            logger.warning(f"Failed with {config['description']}: {str(e)}")
-            if "429" in str(e):
-                rate_manager.record_error(config['name'], e)
-            await asyncio.sleep(config['wait_time'])
+        except Exception as exc:
+            last_error = exc
+            rate_manager.record_error(config["name"], exc)
+            await asyncio.sleep(config["wait_time"])
             continue
 
-    raise last_error or RuntimeError("全てのモデルでの処理に失敗しました")
-
-
-@app.get("/", response_class=HTMLResponse)
-async def root(request: Request):
-    """メインページを表示"""
-    return templates.TemplateResponse(
-        "index.html",
-        {"request": request}
-    )
-
-# エラーメッセージの定義を更新
-ERROR_MESSAGES = {
-    'model_not_available': {
-        'message': '申し訳ありません。現在このモデルは利用できません。',
-        'action': '別のモデルを選択するか、しばらく待ってから再度お試しください。',
-        'wait_time': 60,
-        'severity': 'error'
-    },
-    'rate_limit': {
-        'message': 'アクセスが集中しています。',
-        'action': '1分ほど待ってから再度お試しください。',
-        'wait_time': 60,
-        'severity': 'warning'
-    },
-    'invalid_image': {
-        'message': '画像の読み込みに失敗しました。',
-        'action': '別の画像を試すか、画像を小さくしてお試しください。',
-        'wait_time': 0,
-        'severity': 'error'
-    },
-    'processing_error': {
-        'message': '画像の処理中にエラーが発生しました。',
-        'action': '別の画像で試すか, しばらく待ってから再度お試しください。',
-        'wait_time': 30,
-        'severity': 'error'
-    },
-    'network_error': {
-        'message': 'ネットワークエラーが発生しました。',
-        'action': 'インターネット接続を確認して、再度お試しください。',
-        'wait_time': 10,
-        'severity': 'warning'
-    },
-    'invalid_model': {
-        'message': '指定されたモデルは現在利用できません。',
-        'action': '別のモデルを選択してください。',
-        'wait_time': 0,
-        'severity': 'error'
-    },
-    'quota_exceeded': {
-        'message': 'APIの利用制限に達しました。',
-        'action': 'しばらく待ってから再度お試しください。',
-        'wait_time': 60,
-        'severity': 'warning'
-    }
-}
-
-
-def get_user_friendly_error(error_type: str, original_error: str = None, model_name: str = None) -> dict:
-    """ユーザーフレンドリーなエラーメッセージを生成"""
-    error_info = ERROR_MESSAGES.get(error_type, {
-        'message': '予期せぬエラーが発生しました。',
-        'action': 'しばらく待ってから再度お試しください。',
-        'wait_time': 30,
-        'severity': 'error'
-    })
-
-    # モデル固有のレート制限情報を取得
-    wait_time = error_info['wait_time']
-    if error_type == 'rate_limit' and model_name:
-        rate_limiter = rate_manager.model_limiters.get(model_name)
-        if rate_limiter and rate_limiter['reset_time']:
-            wait_time = max(
-                0, int(rate_limiter['reset_time'] - time.time()))
-
-    return {
-        'error': True,
-        'message': error_info['message'],
-        'action': error_info['action'],
-        'wait_time': wait_time,
-        'severity': error_info['severity'],
-        'model': model_name,
-        'detail': str(original_error) if original_error else None,
-        'timestamp': time.time()
-    }
+    if last_error:
+        raise last_error
+    raise HTTPException(status_code=429, detail="APIのレート制限に達しました")
 
 
 @app.post("/diagnose")
 async def diagnose_plant(
-    file: UploadFile,
-    background_tasks: BackgroundTasks,
-    model_name: str = None
+    file: UploadFile = File(...),
+    model_name: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
 ):
-    """植物診断を実行"""
-    try:
-        start_time = time.time()
+    start_time = time.time()
 
-        # レート制限のチェック
-        if not rate_manager.is_allowed(model_name):
-            return JSONResponse(
-                status_code=429,
-                content=get_user_friendly_error(
-                    'rate_limit', model_name=model_name)
-            )
+    if file.content_type not in ALLOWED_MIME_TYPES:
+        raise HTTPException(status_code=400, detail="対応していない画像形式です")
 
-        # ファイルの検証
-        if not file.content_type.startswith('image/'):
-            return JSONResponse(
-                status_code=400,
-                content=get_user_friendly_error('invalid_image')
-            )
+    contents = await file.read()
+    if len(contents) > MAX_FILE_SIZE_BYTES:
+        raise HTTPException(status_code=400, detail="ファイルサイズが大きすぎます")
 
-        # 画像の読み込みと前処理
+    image_hash = calculate_image_hash(contents)
+    processed_image = process_image(contents, file.content_type)
+
+    ext = get_extension(file.content_type, file.filename)
+    filename = f"{uuid.uuid4().hex}{ext}"
+    image_path = f"/uploads/{filename}"
+    full_path = UPLOAD_DIR / filename
+    with open(full_path, "wb") as buffer:
+        buffer.write(contents)
+
+    cached = None
+    cached_query = await db.execute(
+        select(Diagnosis)
+        .where(Diagnosis.image_hash == image_hash)
+        .order_by(Diagnosis.created_at.desc())
+        .limit(1)
+    )
+    cached = cached_query.scalar_one_or_none()
+
+    used_cache = False
+    diagnosis_text = None
+    model_used = None
+    model_desc = None
+
+    if cached and (not model_name or cached.model_name == model_name):
+        used_cache = True
+        diagnosis_text = cached.diagnosis_text
+        model_used = cached.model_name
+        model_desc = cached.model_description
+
+    if not used_cache:
         try:
-            contents = await file.read()
-            image_hash = calculate_image_hash(contents)
-            processed_image = process_image(contents, file.content_type)
-        except Exception as e:
-            logger.error(f"Image processing error: {str(e)}")
-            return JSONResponse(
-                status_code=400,
-                content=get_user_friendly_error('processing_error', str(e))
-            )
+            response = await run_diagnosis(DIAGNOSIS_PROMPT, processed_image, model_name)
+            if not response or not getattr(response, "text", None):
+                raise HTTPException(status_code=500, detail="診断結果が空でした")
+            diagnosis_text = response.text
+            model_used = getattr(response, "model_name", None)
+            model_desc = getattr(response, "model_info", None)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logger.error("Diagnosis failed: %s", exc)
+            raise HTTPException(status_code=500, detail="診断に失敗しました")
 
-        # キャッシュされた診断結果をチェック
-        cached_result = get_cached_diagnosis(image_hash)
-        if cached_result:
-            logger.info("Using cached diagnosis result")
-            return JSONResponse(content=cached_result)
+    processing_time = round(time.time() - start_time, 2)
 
-        # 診断の実行
-        try:
-            if model_name:
-                selected_model = next(
-                    (m for m in available_models if m['config']
-                     ['name'] == model_name),
-                    None
-                )
-                if not selected_model:
-                    return JSONResponse(
-                        status_code=400,
-                        content=get_user_friendly_error('invalid_model')
-                    )
+    entry = Diagnosis(
+        created_at=datetime.utcnow(),
+        image_path=image_path,
+        image_hash=image_hash,
+        mime_type=file.content_type,
+        file_size=len(contents),
+        diagnosis_text=diagnosis_text,
+        model_name=model_used,
+        model_description=model_desc,
+        processing_time=processing_time,
+    )
+    db.add(entry)
+    await db.commit()
+    await db.refresh(entry)
 
-                response = await process_image_with_retry(
-                    selected_model['model'],
-                    DIAGNOSIS_PROMPT,
-                    processed_image
-                )
-                response.model_info = selected_model['config']['description']
-            else:
-                response = await process_image_with_models(DIAGNOSIS_PROMPT, processed_image)
-
-            if not response:
-                return JSONResponse(
-                    status_code=500,
-                    content=get_user_friendly_error('processing_error')
-                )
-
-            result = {
-                "success": True,
-                "diagnosis": response.text,
-                "model_info": getattr(response, 'model_info', 'Unknown Model'),
-                "processing_time": round(time.time() - start_time, 2),
-                "timestamp": time.time(),
-                "image_hash": image_hash
-            }
-
-            # 診断結果を履歴に追加
-            try:
-                logger.info("Adding diagnosis result to history...")
-                entry = diagnosis_history.add_entry(result, contents)
-                result["image_path"] = entry.get("image_path")
-                logger.info(
-                    f"Successfully added diagnosis to history. Entry ID: {entry['id']}")
-            except Exception as e:
-                logger.error(f"Failed to save diagnosis history: {str(e)}")
-                # エラーは記録するが、診断結果は返す
-
-            return JSONResponse(content=result)
-
-        except Exception as e:
-            error_type = 'quota_exceeded' if "429" in str(
-                e) else 'model_not_available'
-            if "429" in str(e):
-                rate_manager.record_error(model_name, e)
-
-            return JSONResponse(
-                status_code=500,
-                content=get_user_friendly_error(error_type, str(e), model_name)
-            )
-
-    except Exception as e:
-        logger.error(f"Unexpected error: {str(e)}")
-        return JSONResponse(
-            status_code=500,
-            content=get_user_friendly_error('processing_error', str(e))
-        )
-
-# 診断履歴の管理
-
-
-class DiagnosisHistory:
-    def __init__(self):
-        self.entries: List[DiagnosisEntry] = []
-        self.next_id = 1
-        self.load_history()
-
-    def add_entry(self, image_path: str, diagnosis_result: Dict[str, Any],
-                  model_used: str, processing_time: float) -> int:
-        entry = DiagnosisEntry(
-            id=self.next_id,
-            timestamp=datetime.now().isoformat(),
-            image_path=image_path,
-            diagnosis_result=diagnosis_result,
-            model_used=model_used,
-            processing_time=processing_time
-        )
-        self.entries.append(entry)
-        self.next_id += 1
-        self.save_history()
-        return entry.id
-
-    def get_entry(self, entry_id: int) -> Optional[DiagnosisEntry]:
-        for entry in self.entries:
-            if entry.id == entry_id:
-                return entry
-        return None
-
-    def add_chat_message(self, entry_id: int, role: str, message: str):
-        entry = self.get_entry(entry_id)
-        if entry:
-            entry.chat_history.append({
-                "role": role,
-                "message": message,
-                "timestamp": datetime.now().isoformat()
-            })
-            self.save_history()
-
-    def get_history(self) -> List[DiagnosisEntry]:
-        return self.entries
-
-    def clear_history(self):
-        self.entries = []
-        self.save_history()
-
-    def save_history(self):
-        history_file = Path("history/diagnosis_history.json")
-        history_file.parent.mkdir(exist_ok=True)
-        with open(history_file, "w", encoding="utf-8") as f:
-            json.dump([entry.dict() for entry in self.entries], f,
-                      ensure_ascii=False, indent=2)
-
-    def load_history(self):
-        history_file = Path("history/diagnosis_history.json")
-        if history_file.exists():
-            with open(history_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                self.entries = [DiagnosisEntry(**entry) for entry in data]
-                if self.entries:
-                    self.next_id = max(entry.id for entry in self.entries) + 1
-
-
-# 診断履歴マネージャーの初期化（グローバルスコープで初期化）
-diagnosis_history = DiagnosisHistory()
-
-# 履歴取得用のエンドポイントを追加
+    return JSONResponse(content=format_diagnosis_response(entry, used_cache))
 
 
 @app.get("/history")
-async def get_diagnosis_history(limit: int = 10):
-    """診断履歴を取得するエンドポイント"""
-    return {
-        "success": True,
-        "history": diagnosis_history.get_history(limit)
-    }
+async def get_history(limit: int = 20, db: AsyncSession = Depends(get_db)) -> Dict[str, Any]:
+    query = await db.execute(
+        select(Diagnosis).order_by(Diagnosis.created_at.desc()).limit(limit)
+    )
+    entries = query.scalars().all()
 
-# 履歴削除用のエンドポイント
-
-
-@app.post("/clear-history")
-async def clear_diagnosis_history():
-    """診断履歴を削除するエンドポイント"""
-    try:
-        diagnosis_history.clear_history()
-        return JSONResponse(content={"success": True, "message": "履歴を削除しました"})
-    except Exception as e:
-        logger.error(f"Failed to clear history: {e}")
-        return JSONResponse(
-            status_code=500,
-            content={"success": False, "message": "履歴の削除に失敗しました"}
+    history = []
+    for entry in entries:
+        chat_count_query = await db.execute(
+            select(ChatMessage).where(ChatMessage.diagnosis_id == entry.id)
+        )
+        chat_count = len(chat_count_query.scalars().all())
+        history.append(
+            {
+                "id": entry.id,
+                "timestamp": entry.created_at.isoformat(),
+                "image": {
+                    "url": entry.image_path,
+                },
+                "diagnosis": entry.diagnosis_text,
+                "model": {
+                    "name": entry.model_name,
+                    "description": entry.model_description,
+                },
+                "processing_time": entry.processing_time,
+                "chat_count": chat_count,
+            }
         )
 
-# WebSocketコネクション管理
-
-
-class ConnectionManager:
-    def __init__(self):
-        self.active_connections: Dict[str, WebSocket] = {}
-
-    async def connect(self, websocket: WebSocket, session_id: str):
-        await websocket.accept()
-        self.active_connections[session_id] = websocket
-
-    def disconnect(self, session_id: str):
-        self.active_connections.pop(session_id, None)
-
-    async def send_message(self, session_id: str, message: str):
-        if session_id in self.active_connections:
-            await self.active_connections[session_id].send_text(message)
-
-
-manager = ConnectionManager()
-
-# チャットエンドポイント（HTTP）
-
-
-@app.post("/chat/{entry_id}")
-async def chat_endpoint(entry_id: int, chat_message: ChatMessage):
-    entry = diagnosis_history.get_entry(entry_id)
-    if not entry:
-        raise HTTPException(status_code=404, detail="診断エントリが見つかりません")
-
-    # チャットモデルで応答を生成
-    try:
-        model = genai.GenerativeModel('gemini-1.5-pro')
-        chat = model.start_chat(history=[])
-        response = await chat.send_message_async(chat_message.message)
-
-        # チャット履歴に追加
-        diagnosis_history.add_chat_message(
-            entry_id, "user", chat_message.message)
-        diagnosis_history.add_chat_message(
-            entry_id, "assistant", response.text)
-
-        return {
-            "success": True,
-            "session_id": chat_message.session_id,
-            "reply": response.text
-        }
-    except Exception as e:
-        logger.error(f"チャットエラー: {str(e)}")
-        raise HTTPException(status_code=500, detail="チャット処理中にエラーが発生しました")
-
-# WebSocketチャットエンドポイント
-
-
-@app.websocket("/ws/chat/{session_id}")
-async def websocket_chat(websocket: WebSocket, session_id: str):
-    await manager.connect(websocket, session_id)
-    try:
-        while True:
-            data = await websocket.receive_text()
-            model = genai.GenerativeModel('gemini-1.5-pro')
-            chat = model.start_chat(history=[])
-            response = await chat.send_message_async(data)
-            await manager.send_message(session_id, response.text)
-    except Exception as e:
-        logger.error(f"WebSocketエラー: {str(e)}")
-    finally:
-        manager.disconnect(session_id)
-
-# 診断履歴の詳細取得エンドポイント
+    return {"success": True, "history": history}
 
 
 @app.get("/history/{entry_id}")
-async def get_history_entry(entry_id: int):
-    entry = diagnosis_history.get_entry(entry_id)
-    if entry:
-        return {"success": True, "entry": entry}
-    return JSONResponse(
-        status_code=404,
-        content={"success": False, "message": "エントリが見つかりません"}
+async def get_history_entry(entry_id: int, db: AsyncSession = Depends(get_db)) -> Dict[str, Any]:
+    entry_query = await db.execute(select(Diagnosis).where(Diagnosis.id == entry_id))
+    entry = entry_query.scalar_one_or_none()
+    if not entry:
+        raise HTTPException(status_code=404, detail="エントリが見つかりません")
+
+    chat_query = await db.execute(
+        select(ChatMessage)
+        .where(ChatMessage.diagnosis_id == entry_id)
+        .order_by(ChatMessage.created_at.asc())
     )
+    chats = [
+        {
+            "role": chat.role,
+            "message": chat.message,
+            "timestamp": chat.created_at.isoformat(),
+        }
+        for chat in chat_query.scalars().all()
+    ]
+
+    return {
+        "success": True,
+        "entry": {
+            "id": entry.id,
+            "timestamp": entry.created_at.isoformat(),
+            "image": {
+                "url": entry.image_path,
+            },
+            "diagnosis": entry.diagnosis_text,
+            "model": {
+                "name": entry.model_name,
+                "description": entry.model_description,
+            },
+            "processing_time": entry.processing_time,
+            "chat": chats,
+        },
+    }
+
+
+@app.post("/clear-history")
+async def clear_history(db: AsyncSession = Depends(get_db)) -> Dict[str, Any]:
+    await db.execute(delete(ChatMessage))
+    await db.execute(delete(Diagnosis))
+    await db.commit()
+
+    for file_path in UPLOAD_DIR.glob("*"):
+        try:
+            if file_path.is_file():
+                file_path.unlink()
+        except Exception as exc:
+            logger.warning("Failed to remove %s: %s", file_path, exc)
+
+    return {"success": True, "message": "履歴を削除しました"}
+
+
+@app.post("/chat/{entry_id}")
+async def chat_endpoint(
+    entry_id: int,
+    payload: ChatRequest,
+    db: AsyncSession = Depends(get_db),
+) -> Dict[str, Any]:
+    entry_query = await db.execute(select(Diagnosis).where(Diagnosis.id == entry_id))
+    entry = entry_query.scalar_one_or_none()
+    if not entry:
+        raise HTTPException(status_code=404, detail="診断エントリが見つかりません")
+
+    chat_query = await db.execute(
+        select(ChatMessage)
+        .where(ChatMessage.diagnosis_id == entry_id)
+        .order_by(ChatMessage.created_at.asc())
+    )
+    history_rows = chat_query.scalars().all()
+    history = []
+    for msg in history_rows:
+        role = "user" if msg.role == "user" else "model"
+        history.append({"role": role, "parts": [msg.message]})
+
+    chat_model = genai.GenerativeModel(CHAT_MODEL)
+    chat = chat_model.start_chat(history=history)
+
+    response = await chat.send_message_async(payload.message)
+    reply_text = response.text
+
+    db.add(ChatMessage(diagnosis_id=entry_id, role="user", message=payload.message))
+    db.add(ChatMessage(diagnosis_id=entry_id, role="assistant", message=reply_text))
+    await db.commit()
+
+    return {"success": True, "reply": reply_text}
+
+
+@app.get("/{full_path:path}", include_in_schema=False)
+async def serve_spa(full_path: str) -> HTMLResponse:
+    if FRONTEND_INDEX.exists():
+        return FileResponse(FRONTEND_INDEX)
+    raise HTTPException(status_code=404, detail="Not Found")
+
 
 if __name__ == "__main__":
+    import uvicorn
+
     uvicorn.run(
         "app_simple:app",
-        host=os.getenv('HOST', '0.0.0.0'),
-        port=int(os.getenv('PORT', 8000)),
-        reload=True
+        host=os.getenv("HOST", "0.0.0.0"),
+        port=int(os.getenv("PORT", 8000)),
+        reload=os.getenv("RELOAD", "true").lower() == "true",
     )

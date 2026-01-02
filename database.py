@@ -1,14 +1,21 @@
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+import os
+
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
+
 from models import Base
 
 # データベースURLの設定
-SQLALCHEMY_DATABASE_URL = "sqlite+aiosqlite:///./plant_diagnosis.db"
+SQLALCHEMY_DATABASE_URL = os.getenv(
+    "DATABASE_URL",
+    "sqlite+aiosqlite:///./plant_diagnosis.db",
+)
 
 # 非同期エンジンの作成
 engine = create_async_engine(
     SQLALCHEMY_DATABASE_URL,
-    echo=True,  # SQLログを出力
+    echo=False,
+    future=True,
 )
 
 # 非同期セッションの設定
