@@ -1,0 +1,12 @@
+{
+  "expo": {
+    "name": "PlantLLM",
+    "slug": "plantllm",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "extra": {
+      "apiBaseUrl": "http://localhost:8000"
+    }
+  }
+}

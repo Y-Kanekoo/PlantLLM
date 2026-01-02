@@ -60,6 +60,24 @@ npm run build
 - `POST /clear-history`: 履歴削除
 - `GET /models`: 利用可能なモデル
 
+## Mobile (React Native / Expo)
+
+Web UI で動作確認後、React Native 版を `mobile/` に追加しています。Expo を使って起動します。
+
+```bash
+cd mobile
+npm install
+npm run start
+```
+
+モバイル実機でアクセスする場合は、環境変数 `EXPO_PUBLIC_API_BASE_URL` を設定して API の URL を指定してください。
+
+例: macOS のローカル IP を使う場合
+
+```bash
+EXPO_PUBLIC_API_BASE_URL=http://192.168.0.10:8000 npm run start
+```
+
 ## 研究・評価用スクリプト
 
 PlantVillage データセットを使った評価や分析用スクリプトが残っています。アプリ利用だけであれば実行不要です。

@@ -17,6 +17,9 @@ uploads/
 # Node
 frontend/node_modules/
 frontend/dist/
+mobile/node_modules/
+mobile/.expo/
+mobile/.expo-shared/
 
 # OS
 .DS_Store
