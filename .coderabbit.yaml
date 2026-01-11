@@ -1,0 +1,19 @@
+language: ja
+
+reviews:
+  auto_review:
+    enabled: true
+    base_branches:
+      - main
+      - develop
+
+  profile: default
+  high_level_summary: true
+
+path_filters:
+  - "!**/__pycache__/**"
+  - "!**/venv/**"
+  - "!**/.venv/**"
+  - "!**/*.pyc"
+  - "!**/dist/**"
+  - "!**/node_modules/**"
