@@ -1,4 +1,4 @@
-﻿absl-py==2.1.0
+absl-py==2.1.0
 aiosqlite==0.19.0
 annotated-types==0.7.0
 anyio==3.7.1
@@ -13,7 +13,7 @@ cycler==0.12.1
 exceptiongroup==1.2.2
 fastapi==0.104.1
 filelock==3.16.1
-fonttools==4.55.4
+fonttools==4.61.1
 fsspec==2024.12.0
 google-ai-generativelanguage==0.4.0
 google-api-core==2.24.0
