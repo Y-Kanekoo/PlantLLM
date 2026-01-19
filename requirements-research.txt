@@ -11,7 +11,7 @@ torchaudio==2.5.1
 torchvision==0.20.1
 
 # Data Science
-numpy==1.26.4
+numpy==2.4.1
 pandas==2.2.0
 pyarrow==19.0.0
 
