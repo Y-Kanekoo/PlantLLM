@@ -5,7 +5,7 @@ import logging
 import os
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -44,7 +44,18 @@ app = FastAPI(
 )
 
 # CORS設定: 環境変数で許可オリジンを制御（本番では適切に制限すること）
-CORS_ORIGINS = os.getenv("CORS_ORIGINS", "http://localhost:5173,http://localhost:8000").split(",")
+def _parse_cors_origins(env_value: str) -> List[str]:
+    """CORS_ORIGINS環境変数をパースし、空白をトリミングして返す"""
+    origins = [origin.strip() for origin in env_value.split(",") if origin.strip()]
+    # 空の場合はデフォルト値を使用
+    if not origins:
+        logger.warning("CORS_ORIGINS is empty, using default localhost origins")
+        return ["http://localhost:5173", "http://localhost:8000"]
+    return origins
+
+CORS_ORIGINS = _parse_cors_origins(
+    os.getenv("CORS_ORIGINS", "http://localhost:5173,http://localhost:8000")
+)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,
@@ -199,13 +210,32 @@ def detect_mime_type(data: bytes) -> str:
 
 
 async def process_image_with_retry(
-    client: genai.Client, model_name: str, prompt: str, image_data: bytes, retries: int = 3
-) -> Any:
-    """新しいgoogle.genai SDKを使用して画像診断を実行（リトライ付き）"""
+    client: genai.Client,
+    model_name: str,
+    prompt: str,
+    image_data: bytes,
+    retries: int = 3,
+) -> types.GenerateContentResponse:
+    """新しいgoogle.genai SDKを使用して画像診断を実行（リトライ付き）
+
+    Args:
+        client: Google GenAI クライアント
+        model_name: 使用するモデル名
+        prompt: 診断プロンプト
+        image_data: 画像データ（JPEG形式）
+        retries: 最大リトライ回数
+
+    Returns:
+        GenerateContentResponse: AIからの応答
+
+    Raises:
+        Exception: 全てのリトライが失敗した場合
+    """
     attempt = 0
+    last_error: Optional[Exception] = None
+
     while attempt < retries:
         try:
-            # 画像をPart.from_bytesで渡す
             response = await client.aio.models.generate_content(
                 model=model_name,
                 contents=[
@@ -215,13 +245,30 @@ async def process_image_with_retry(
             )
             return response
         except Exception as exc:
+            last_error = exc
             attempt += 1
-            if attempt >= retries:
-                raise
-            if "429" in str(exc) or "RESOURCE_EXHAUSTED" in str(exc):
-                await asyncio.sleep(8)
+            error_str = str(exc)
+
+            # レート制限エラーの場合は長めに待機
+            is_rate_limit = "429" in error_str or "RESOURCE_EXHAUSTED" in error_str
+            wait_time = 8 if is_rate_limit else 2
+
+            if attempt < retries:
+                logger.warning(
+                    "API call failed (attempt %d/%d): %s. Retrying in %ds...",
+                    attempt, retries, error_str[:100], wait_time
+                )
+                await asyncio.sleep(wait_time)
             else:
-                await asyncio.sleep(2)
+                logger.error(
+                    "API call failed after %d attempts: %s",
+                    retries, error_str[:200]
+                )
+
+    # ここに到達することはないはずだが、型チェッカーのため
+    if last_error:
+        raise last_error
+    raise RuntimeError("Unexpected state in process_image_with_retry")
 
 
 def process_image(image_data: bytes) -> Dict[str, Any]:
@@ -414,7 +461,7 @@ class DiagnosisResult:
 
 
 async def run_diagnosis(
-    prompt: str, image_data: bytes, model_name: Optional[str]
+    prompt: str, image_data: bytes, model_name: Optional[str] = None
 ) -> DiagnosisResult:
     """新しいgoogle.genai SDKを使用して診断を実行"""
     if not genai_client:
@@ -462,7 +509,7 @@ async def diagnose_plant(
     file: UploadFile = File(...),
     model_name: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
-):
+) -> JSONResponse:
     start_time = time.time()
 
     if file.content_type not in ALLOWED_MIME_TYPES:
@@ -542,7 +589,7 @@ async def diagnose_plant(
     processing_time = round(time.time() - start_time, 2)
 
     entry = Diagnosis(
-        created_at=datetime.utcnow(),
+        created_at=datetime.now(timezone.utc),
         image_path=image_path,
         image_hash=image_hash,
         mime_type=detected_mime,  # detect_mime_type基準で保存

@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import Column, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.ext.declarative import declarative_base
@@ -8,13 +8,18 @@ from sqlalchemy.orm import relationship
 Base = declarative_base()
 
 
+def _utc_now() -> datetime:
+    """タイムゾーン付きのUTC現在時刻を返す（Python 3.12+推奨形式）"""
+    return datetime.now(timezone.utc)
+
+
 class Diagnosis(Base):
     """診断結果の永続化テーブル"""
 
     __tablename__ = "diagnoses"
 
     id = Column(Integer, primary_key=True, index=True)
-    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    created_at = Column(DateTime(timezone=True), default=_utc_now, index=True)
     image_path = Column(String, nullable=False)
     image_hash = Column(String, index=True)
     mime_type = Column(String)
@@ -41,7 +46,7 @@ class ChatMessage(Base):
     diagnosis_id = Column(Integer, ForeignKey("diagnoses.id", ondelete="CASCADE"))
     role = Column(String, nullable=False)
     message = Column(Text, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), default=_utc_now)
 
     diagnosis = relationship("Diagnosis", back_populates="chat_messages")
 
@@ -60,4 +65,4 @@ class Feedback(Base):
     id = Column(Integer, primary_key=True, index=True)
     diagnosis_id = Column(Integer, ForeignKey("diagnoses.id", ondelete="SET NULL"))
     user_feedback = Column(Text, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), default=_utc_now)

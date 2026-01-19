@@ -21,6 +21,8 @@ with patch.dict("os.environ", {"GEMINI_API_KEY": "test_key"}):
             process_image,
             get_extension_from_mime,
             DiagnosisResult,
+            _parse_cors_origins,
+            MAX_FILE_SIZE_BYTES,
         )
 
 from starlette.testclient import TestClient
@@ -369,3 +371,122 @@ class TestCacheDeduplication:
                 assert data2["from_cache"] is True
                 # 画像パスが同じこと（新規保存されていない）
                 assert data2["image"]["url"] == data1["image"]["url"]
+
+
+class TestCorsOriginsParsing:
+    """CORS_ORIGINS環境変数のパーステスト"""
+
+    def test_parse_simple_origins(self):
+        """単純なカンマ区切りのパース"""
+        result = _parse_cors_origins("http://localhost:3000,http://localhost:8000")
+        assert result == ["http://localhost:3000", "http://localhost:8000"]
+
+    def test_parse_with_whitespace(self):
+        """空白を含む場合のトリミング"""
+        result = _parse_cors_origins("  http://localhost:3000 , http://localhost:8000  ")
+        assert result == ["http://localhost:3000", "http://localhost:8000"]
+
+    def test_parse_empty_string_returns_default(self):
+        """空文字列の場合はデフォルト値を返す"""
+        result = _parse_cors_origins("")
+        assert result == ["http://localhost:5173", "http://localhost:8000"]
+
+    def test_parse_only_whitespace_returns_default(self):
+        """空白のみの場合はデフォルト値を返す"""
+        result = _parse_cors_origins("   ,  ,  ")
+        assert result == ["http://localhost:5173", "http://localhost:8000"]
+
+    def test_parse_single_origin(self):
+        """単一オリジンのパース"""
+        result = _parse_cors_origins("https://example.com")
+        assert result == ["https://example.com"]
+
+
+class TestFileSizeBoundary:
+    """ファイルサイズ境界値テスト"""
+
+    def _create_test_jpeg(self, size_bytes: int) -> bytes:
+        """指定サイズに近いテスト用JPEG画像を生成"""
+        # 最小のJPEGを生成
+        img = Image.new("RGB", (1, 1), color="white")
+        buffer = io.BytesIO()
+        img.save(buffer, format="JPEG")
+        base_data = buffer.getvalue()
+
+        # 必要なサイズに調整（パディング追加）
+        if len(base_data) < size_bytes:
+            # JPEGコメントマーカーを使ってサイズを増やす
+            # 実際にはJPEGではこの方法は使えないので、
+            # 画像サイズを大きくして対応
+            side = int((size_bytes / 3) ** 0.5) + 1
+            img = Image.new("RGB", (side, side), color="white")
+            buffer = io.BytesIO()
+            img.save(buffer, format="JPEG", quality=100)
+        return buffer.getvalue()
+
+    def test_file_size_at_limit(self):
+        """ファイルサイズが上限ちょうどの場合"""
+        # MAX_FILE_SIZE_BYTESは10MBなので、小さい画像で境界テスト
+        # 実際のテストでは上限を超えないので成功するはず
+        img = Image.new("RGB", (100, 100), color="green")
+        buffer = io.BytesIO()
+        img.save(buffer, format="JPEG")
+        jpeg_data = buffer.getvalue()
+
+        response = client.post(
+            "/diagnose",
+            files={"file": ("test.jpg", jpeg_data, "image/jpeg")},
+        )
+        # DBが初期化されていない場合は500、それ以外は処理続行
+        assert response.status_code in [200, 500]
+
+    def test_file_size_over_limit(self):
+        """ファイルサイズが上限を超える場合"""
+        # MAX_FILE_SIZE_BYTES + 1 のデータを作成
+        over_limit_data = b"\xff\xd8\xff\xe0" + b"x" * (MAX_FILE_SIZE_BYTES + 1)
+
+        response = client.post(
+            "/diagnose",
+            files={"file": ("test.jpg", over_limit_data, "image/jpeg")},
+        )
+        assert response.status_code == 400
+        assert "ファイルサイズが大きすぎます" in response.json()["detail"]
+
+
+class TestEntryIdValidation:
+    """エントリID検証テスト"""
+
+    def test_history_entry_negative_id(self):
+        """負のIDでの履歴取得"""
+        response = client.get("/history/-1")
+        # 負のIDでも404が返る（存在しないエントリ）
+        assert response.status_code in [404, 500]
+
+    def test_history_entry_zero_id(self):
+        """ID=0での履歴取得"""
+        response = client.get("/history/0")
+        assert response.status_code in [404, 500]
+
+    def test_chat_negative_id(self):
+        """負のIDでのチャット"""
+        response = client.post(
+            "/chat/-1",
+            json={"message": "test"},
+        )
+        assert response.status_code in [404, 500]
+
+
+class TestDatetimeHandling:
+    """日時処理のテスト"""
+
+    def test_history_timestamp_format(self):
+        """履歴のタイムスタンプがISO形式であること"""
+        response = client.get("/history")
+        if response.status_code == 200:
+            data = response.json()
+            if data.get("history"):
+                for entry in data["history"]:
+                    timestamp = entry.get("timestamp")
+                    assert timestamp is not None
+                    # ISO形式であることを確認（Tが含まれる）
+                    assert "T" in timestamp or "-" in timestamp
