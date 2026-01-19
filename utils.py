@@ -1,3 +1,12 @@
+"""
+研究スクリプト用ユーティリティモジュール
+
+NOTE: このファイルは旧SDK（google.generativeai）を使用しています。
+Webアプリ（app_simple.py）は新SDK（google.genai）に移行済みです。
+研究スクリプト群を新SDKに移行する場合は、以下の変更が必要:
+  - genai.configure(api_key=...) → genai.Client(api_key=...)
+  - genai.GenerativeModel(name) → client.models.generate_content(model=name, ...)
+"""
 import os
 import json
 import csv

@@ -1,81 +1,10 @@
-﻿absl-py==2.1.0
-aiosqlite==0.19.0
-annotated-types==0.7.0
-anyio==3.7.1
-bleach==6.2.0
-cachetools==5.5.0
-certifi==2024.12.14
-charset-normalizer==3.4.1
-click==8.1.8
-colorama==0.4.6
-contourpy==1.3.1
-cycler==0.12.1
-exceptiongroup==1.2.2
-fastapi==0.104.1
-filelock==3.16.1
-fonttools==4.55.4
-fsspec==2024.12.0
-google-ai-generativelanguage==0.4.0
-google-api-core==2.24.0
-google-auth==2.37.0
-google-generativeai==0.3.2
-googleapis-common-protos==1.66.0
-greenlet==3.1.1
-grpcio==1.69.0
-grpcio-status==1.62.3
-h11==0.14.0
-idna==3.10
-Jinja2==3.1.2
-joblib==1.4.2
-kaggle==1.6.3
-kiwisolver==1.4.8
-lxml==5.3.0
-MarkupSafe==3.0.2
-matplotlib==3.10.0
-mpmath==1.3.0
-networkx==3.4.2
-nltk==3.8.1
-numpy==1.26.4
-opencv-python==4.9.0.80
-packaging==24.2
-pandas==2.2.0
-pillow==10.1.0
-portalocker==3.1.1
-proto-plus==1.25.0
-protobuf==4.25.5
-pyarrow==19.0.0
-pyasn1==0.6.1
-pyasn1_modules==0.4.1
-pydantic==2.10.5
-pydantic_core==2.27.2
-pyparsing==3.2.1
-python-dateutil==2.9.0.post0
-python-dotenv==1.0.0
-python-multipart==0.0.6
-python-slugify==8.0.4
-pytz==2024.2
-pywin32==308; platform_system == "Windows"
-regex==2024.11.6
-requests==2.32.3
-rouge-score==0.1.2
-rsa==4.9
-sacrebleu==2.4.0
-seaborn==0.13.2
-six==1.17.0
-sniffio==1.3.1
-SQLAlchemy==2.0.27
-starlette==0.27.0
-sympy==1.13.1
-tabulate==0.9.0
-text-unidecode==1.3
-torch==2.5.1
-torchaudio==2.5.1
-torchvision==0.20.1
-tqdm==4.67.1
-typing_extensions==4.12.2
-tzdata==2024.2
-urllib3==2.3.0
-uvicorn==0.24.0
-webencodings==0.5.1
-tenacity==8.2.3
-aiofiles==23.2.1
+# PlantLLM 依存関係
+#
+# Webアプリのみを動かす場合:
+#   pip install -r requirements-web.txt
+#
+# 研究スクリプト（分類実験・可視化）も使う場合:
+#   pip install -r requirements-research.txt
+#
+# このファイルは互換性のため残しています（研究スクリプト用を参照）
+-r requirements-research.txt

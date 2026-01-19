@@ -9,15 +9,17 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+# selectinload は N+1 解消でサブクエリ方式に変更したため不要
 from PIL import Image
 
 from database import get_db, init_db
@@ -41,9 +43,11 @@ app = FastAPI(
     version=APP_VERSION,
 )
 
+# CORS設定: 環境変数で許可オリジンを制御（本番では適切に制限すること）
+CORS_ORIGINS = os.getenv("CORS_ORIGINS", "http://localhost:5173,http://localhost:8000").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -64,7 +68,9 @@ app.mount("/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
 
 MAX_IMAGE_SIZE = 1024
 MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024
-ALLOWED_MIME_TYPES = {"image/jpeg", "image/png", "image/gif"}
+# image/jpgは非標準だが一部ブラウザ/クライアントが送信するため許容
+ALLOWED_MIME_TYPES = {"image/jpeg", "image/jpg", "image/png", "image/gif"}
+MAX_HISTORY_LIMIT = 100  # /history の最大取得件数
 
 DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "gemini-2.0-flash-exp")
 CHAT_MODEL = os.getenv("CHAT_MODEL", "gemini-1.5-pro")
@@ -177,26 +183,56 @@ def calculate_image_hash(image_bytes: bytes) -> str:
     return hashlib.md5(image_bytes).hexdigest()
 
 
+def detect_mime_type(data: bytes) -> str:
+    """ファイルのmagic bytesからMIMEタイプを検出する。"""
+    # 各フォーマットのシグネチャ
+    signatures = {
+        b"\xff\xd8\xff": "image/jpeg",
+        b"\x89PNG\r\n\x1a\n": "image/png",
+        b"GIF87a": "image/gif",
+        b"GIF89a": "image/gif",
+    }
+    for sig, mime in signatures.items():
+        if data.startswith(sig):
+            return mime
+    return "application/octet-stream"
+
+
 async def process_image_with_retry(
-    model, prompt: str, image: Dict[str, Any], retries: int = 3
+    client: genai.Client, model_name: str, prompt: str, image_data: bytes, retries: int = 3
 ) -> Any:
+    """新しいgoogle.genai SDKを使用して画像診断を実行（リトライ付き）"""
     attempt = 0
     while attempt < retries:
         try:
-            return await model.generate_content_async([prompt, image])
+            # 画像をPart.from_bytesで渡す
+            response = await client.aio.models.generate_content(
+                model=model_name,
+                contents=[
+                    prompt,
+                    types.Part.from_bytes(data=image_data, mime_type="image/jpeg"),
+                ],
+            )
+            return response
         except Exception as exc:
             attempt += 1
             if attempt >= retries:
                 raise
-            if "429" in str(exc):
+            if "429" in str(exc) or "RESOURCE_EXHAUSTED" in str(exc):
                 await asyncio.sleep(8)
             else:
                 await asyncio.sleep(2)
 
 
-def process_image(image_data: bytes, mime_type: str) -> Dict[str, Any]:
+def process_image(image_data: bytes) -> Dict[str, Any]:
+    """画像をリサイズし、Gemini API用に処理する。RGBA/Pモードは自動でRGB変換。"""
     try:
         image = Image.open(io.BytesIO(image_data))
+
+        # RGBA/Pモード（透過PNG等）はRGBに変換してJPEG保存エラーを防ぐ
+        if image.mode in ("RGBA", "P"):
+            image = image.convert("RGB")
+
         max_side = max(image.size)
         if max_side > MAX_IMAGE_SIZE:
             ratio = MAX_IMAGE_SIZE / max_side
@@ -209,53 +245,60 @@ def process_image(image_data: bytes, mime_type: str) -> Dict[str, Any]:
             image = image.resize(new_size, resample)
 
         buffer = io.BytesIO()
-        image.save(buffer, format=image.format or "JPEG")
-        return {"mime_type": mime_type, "data": buffer.getvalue()}
+        # 統一フォーマットでJPEG保存（品質85で圧縮）
+        image.save(buffer, format="JPEG", quality=85)
+        return {"mime_type": "image/jpeg", "data": buffer.getvalue()}
     except Exception as exc:
         logger.error("Image processing failed: %s", exc)
         raise ValueError(f"画像の処理に失敗しました: {exc}")
 
 
-def get_extension(content_type: str, filename: str) -> str:
+def get_extension_from_mime(mime_type: str) -> str:
+    """MIMEタイプから拡張子を取得する（detect_mime_type基準）"""
     mime_map = {
         "image/jpeg": ".jpg",
         "image/png": ".png",
         "image/gif": ".gif",
     }
-    if content_type in mime_map:
-        return mime_map[content_type]
-    return Path(filename).suffix or ".jpg"
+    return mime_map.get(mime_type, ".jpg")
+
+
+def _cleanup_file(file_path: Path) -> None:
+    """ファイルを安全に削除する（孤児ファイル対策用）"""
+    try:
+        if file_path.exists():
+            file_path.unlink()
+            logger.info("Cleaned up orphan file: %s", file_path)
+    except Exception as exc:
+        logger.warning("Failed to cleanup file %s: %s", file_path, exc)
 
 
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=2000)
 
 
+# Google GenAI クライアント初期化（新SDK）
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+genai_client: Optional[genai.Client] = None
+
 if not GEMINI_API_KEY:
     logger.warning("GEMINI_API_KEY is not set; diagnosis will fail")
 else:
-    genai.configure(api_key=GEMINI_API_KEY)
-
-
-def initialize_model(model_config: Dict[str, Any]):
     try:
-        model = genai.GenerativeModel(model_config["name"])
-        logger.info("Initialized %s", model_config["description"])
-        return model
+        genai_client = genai.Client(api_key=GEMINI_API_KEY)
+        logger.info("Google GenAI client initialized successfully")
     except Exception as exc:
-        logger.warning("Failed to initialize %s: %s", model_config["description"], exc)
-        return None
+        logger.error("Failed to initialize GenAI client: %s", exc)
 
 
-available_models = []
-for config in MODELS_CONFIG:
-    model = initialize_model(config)
-    if model:
-        available_models.append({"model": model, "config": config})
+def get_available_models() -> List[Dict[str, Any]]:
+    """利用可能なモデル設定を返す"""
+    return [{"config": config} for config in MODELS_CONFIG]
 
+
+available_models = get_available_models()
 if not available_models:
-    logger.error("No models available")
+    logger.error("No models configured")
 
 
 def resolve_models(preferred: Optional[str]) -> List[Dict[str, Any]]:
@@ -362,9 +405,21 @@ async def get_models() -> Dict[str, Any]:
     }
 
 
+class DiagnosisResult:
+    """診断結果をラップするクラス（SDKレスポンスへの属性追加を避ける）"""
+    def __init__(self, text: str, model_name: str, model_description: str):
+        self.text = text
+        self.model_name = model_name
+        self.model_description = model_description
+
+
 async def run_diagnosis(
-    prompt: str, image: Dict[str, Any], model_name: Optional[str]
-) -> Any:
+    prompt: str, image_data: bytes, model_name: Optional[str]
+) -> DiagnosisResult:
+    """新しいgoogle.genai SDKを使用して診断を実行"""
+    if not genai_client:
+        raise HTTPException(status_code=500, detail="GenAIクライアントが初期化されていません")
+
     candidates = resolve_models(model_name)
     if model_name and not candidates:
         raise HTTPException(status_code=400, detail="指定されたモデルが見つかりません")
@@ -379,14 +434,18 @@ async def run_diagnosis(
 
         try:
             response = await process_image_with_retry(
-                model_info["model"],
+                genai_client,
+                config["name"],
                 prompt,
-                image,
+                image_data,
                 retries=config["retry_count"],
             )
-            response.model_info = config["description"]
-            response.model_name = config["name"]
-            return response
+            # ラッパークラスでモデル情報を返す（SDKレスポンスを変更しない）
+            return DiagnosisResult(
+                text=response.text,
+                model_name=config["name"],
+                model_description=config["description"],
+            )
         except Exception as exc:
             last_error = exc
             rate_manager.record_error(config["name"], exc)
@@ -413,20 +472,24 @@ async def diagnose_plant(
     if len(contents) > MAX_FILE_SIZE_BYTES:
         raise HTTPException(status_code=400, detail="ファイルサイズが大きすぎます")
 
+    # サーバー側でMIMEタイプを検証（magic bytesチェック）
+    detected_mime = detect_mime_type(contents)
+    if detected_mime not in ALLOWED_MIME_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"画像形式の検証に失敗しました（検出: {detected_mime}）"
+        )
+
     image_hash = calculate_image_hash(contents)
-    processed_image = process_image(contents, file.content_type)
 
-    ext = get_extension(file.content_type, file.filename)
-    filename = f"{uuid.uuid4().hex}{ext}"
-    image_path = f"/uploads/{filename}"
-    full_path = UPLOAD_DIR / filename
-    with open(full_path, "wb") as buffer:
-        buffer.write(contents)
-
-    cached = None
+    # キャッシュ検索: image_hash + model_name の組み合わせで検索（画像保存前に実行）
+    effective_model = model_name or DEFAULT_MODEL
     cached_query = await db.execute(
         select(Diagnosis)
-        .where(Diagnosis.image_hash == image_hash)
+        .where(
+            Diagnosis.image_hash == image_hash,
+            Diagnosis.model_name == effective_model,
+        )
         .order_by(Diagnosis.created_at.desc())
         .limit(1)
     )
@@ -436,24 +499,43 @@ async def diagnose_plant(
     diagnosis_text = None
     model_used = None
     model_desc = None
+    image_path = None
 
-    if cached and (not model_name or cached.model_name == model_name):
+    if cached:
+        # キャッシュ命中: 既存の画像パスを再利用し、新規保存をスキップ
         used_cache = True
         diagnosis_text = cached.diagnosis_text
         model_used = cached.model_name
         model_desc = cached.model_description
+        image_path = cached.image_path
+    else:
+        # キャッシュミス: 画像を保存して診断を実行
+        # detect_mime_type基準で拡張子を決定（クライアントのcontent_typeではなく実際の画像形式）
+        ext = get_extension_from_mime(detected_mime)
+        filename = f"{uuid.uuid4().hex}{ext}"
+        image_path = f"/uploads/{filename}"
+        full_path = UPLOAD_DIR / filename
+        with open(full_path, "wb") as buffer:
+            buffer.write(contents)
 
-    if not used_cache:
+        processed_image = process_image(contents)
         try:
-            response = await run_diagnosis(DIAGNOSIS_PROMPT, processed_image, model_name)
-            if not response or not getattr(response, "text", None):
+            # 新SDKではimage_dataのbytesを直接渡す
+            response = await run_diagnosis(DIAGNOSIS_PROMPT, processed_image["data"], model_name)
+            if not response or not response.text:
+                # 診断失敗時は保存したファイルを削除（孤児ファイル対策）
+                _cleanup_file(full_path)
                 raise HTTPException(status_code=500, detail="診断結果が空でした")
             diagnosis_text = response.text
-            model_used = getattr(response, "model_name", None)
-            model_desc = getattr(response, "model_info", None)
+            model_used = response.model_name
+            model_desc = response.model_description
         except HTTPException:
+            # HTTPExceptionの場合も保存したファイルを削除
+            _cleanup_file(full_path)
             raise
         except Exception as exc:
+            # 予期しないエラーの場合も保存したファイルを削除
+            _cleanup_file(full_path)
             logger.error("Diagnosis failed: %s", exc)
             raise HTTPException(status_code=500, detail="診断に失敗しました")
 
@@ -463,7 +545,7 @@ async def diagnose_plant(
         created_at=datetime.utcnow(),
         image_path=image_path,
         image_hash=image_hash,
-        mime_type=file.content_type,
+        mime_type=detected_mime,  # detect_mime_type基準で保存
         file_size=len(contents),
         diagnosis_text=diagnosis_text,
         model_name=model_used,
@@ -479,33 +561,44 @@ async def diagnose_plant(
 
 @app.get("/history")
 async def get_history(limit: int = 20, db: AsyncSession = Depends(get_db)) -> Dict[str, Any]:
-    query = await db.execute(
-        select(Diagnosis).order_by(Diagnosis.created_at.desc()).limit(limit)
-    )
-    entries = query.scalars().all()
+    # 上限を超えないよう制限
+    limit = min(max(1, limit), MAX_HISTORY_LIMIT)
 
-    history = []
-    for entry in entries:
-        chat_count_query = await db.execute(
-            select(ChatMessage).where(ChatMessage.diagnosis_id == entry.id)
+    # N+1クエリ解消: サブクエリでchat_countを一括取得
+    chat_count_subq = (
+        select(
+            ChatMessage.diagnosis_id,
+            func.count(ChatMessage.id).label("chat_count"),
         )
-        chat_count = len(chat_count_query.scalars().all())
-        history.append(
-            {
-                "id": entry.id,
-                "timestamp": entry.created_at.isoformat(),
-                "image": {
-                    "url": entry.image_path,
-                },
-                "diagnosis": entry.diagnosis_text,
-                "model": {
-                    "name": entry.model_name,
-                    "description": entry.model_description,
-                },
-                "processing_time": entry.processing_time,
-                "chat_count": chat_count,
-            }
-        )
+        .group_by(ChatMessage.diagnosis_id)
+        .subquery()
+    )
+
+    query = await db.execute(
+        select(Diagnosis, chat_count_subq.c.chat_count)
+        .outerjoin(chat_count_subq, Diagnosis.id == chat_count_subq.c.diagnosis_id)
+        .order_by(Diagnosis.created_at.desc())
+        .limit(limit)
+    )
+    rows = query.all()
+
+    history = [
+        {
+            "id": entry.id,
+            "timestamp": entry.created_at.isoformat(),
+            "image": {
+                "url": entry.image_path,
+            },
+            "diagnosis": entry.diagnosis_text,
+            "model": {
+                "name": entry.model_name,
+                "description": entry.model_description,
+            },
+            "processing_time": entry.processing_time,
+            "chat_count": chat_count or 0,
+        }
+        for entry, chat_count in rows
+    ]
 
     return {"success": True, "history": history}
 
@@ -572,6 +665,10 @@ async def chat_endpoint(
     payload: ChatRequest,
     db: AsyncSession = Depends(get_db),
 ) -> Dict[str, Any]:
+    """新しいgoogle.genai SDKを使用したチャットエンドポイント"""
+    if not genai_client:
+        raise HTTPException(status_code=500, detail="GenAIクライアントが初期化されていません")
+
     entry_query = await db.execute(select(Diagnosis).where(Diagnosis.id == entry_id))
     entry = entry_query.scalar_one_or_none()
     if not entry:
@@ -583,16 +680,31 @@ async def chat_endpoint(
         .order_by(ChatMessage.created_at.asc())
     )
     history_rows = chat_query.scalars().all()
-    history = []
+
+    # 新SDKでは履歴をtypes.Contentのリストとして渡す
+    contents = []
     for msg in history_rows:
         role = "user" if msg.role == "user" else "model"
-        history.append({"role": role, "parts": [msg.message]})
+        contents.append(types.Content(role=role, parts=[types.Part.from_text(text=msg.message)]))
 
-    chat_model = genai.GenerativeModel(CHAT_MODEL)
-    chat = chat_model.start_chat(history=history)
+    # 新しいメッセージを追加
+    contents.append(types.Content(role="user", parts=[types.Part.from_text(text=payload.message)]))
 
-    response = await chat.send_message_async(payload.message)
-    reply_text = response.text
+    # 診断結果をシステムコンテキストとして含める
+    system_instruction = f"以下の植物診断結果に基づいて、ユーザーの質問に答えてください：\n\n{entry.diagnosis_text}"
+
+    try:
+        response = await genai_client.aio.models.generate_content(
+            model=CHAT_MODEL,
+            contents=contents,
+            config=types.GenerateContentConfig(
+                system_instruction=system_instruction,
+            ),
+        )
+        reply_text = response.text
+    except Exception as exc:
+        logger.error("Chat failed: %s", exc)
+        raise HTTPException(status_code=500, detail="チャットに失敗しました")
 
     db.add(ChatMessage(diagnosis_id=entry_id, role="user", message=payload.message))
     db.add(ChatMessage(diagnosis_id=entry_id, role="assistant", message=reply_text))
