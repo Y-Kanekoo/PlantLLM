@@ -12,11 +12,9 @@ updates:
       default-days: 7
     groups:
       minor-and-patch:
+        applies-to: version-updates
         patterns: ["*"]
         update-types: ["minor", "patch"]
-      major:
-        patterns: ["*"]
-        update-types: ["major"]
     labels:
       - "dependencies"
     commit-message:
@@ -34,11 +32,9 @@ updates:
       default-days: 7
     groups:
       minor-and-patch:
+        applies-to: version-updates
         patterns: ["*"]
         update-types: ["minor", "patch"]
-      major:
-        patterns: ["*"]
-        update-types: ["major"]
     labels:
       - "ci"
     commit-message:
@@ -56,11 +52,9 @@ updates:
       default-days: 7
     groups:
       minor-and-patch:
+        applies-to: version-updates
         patterns: ["*"]
         update-types: ["minor", "patch"]
-      major:
-        patterns: ["*"]
-        update-types: ["major"]
 
   - package-ecosystem: "npm"
     directory: "/mobile"
@@ -74,8 +68,6 @@ updates:
       default-days: 7
     groups:
       minor-and-patch:
+        applies-to: version-updates
         patterns: ["*"]
         update-types: ["minor", "patch"]
-      major:
-        patterns: ["*"]
-        update-types: ["major"]
