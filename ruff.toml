@@ -1,0 +1,4 @@
+# FastAPI の依存注入（Depends / File）は引数既定値での呼び出しが正式な書き方のため、
+# B008（引数既定値での関数呼び出し）の対象外として登録する（ルール自体は有効のまま）。
+[lint.flake8-bugbear]
+extend-immutable-calls = ["fastapi.Depends", "fastapi.File"]

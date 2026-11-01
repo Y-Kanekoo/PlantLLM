@@ -1,10 +1,11 @@
-import os
-from pathlib import Path
-from kaggle.api.kaggle_api_extended import KaggleApi
 import logging
-from utils import normalize_path
 import shutil
+from pathlib import Path
+
+from kaggle.api.kaggle_api_extended import KaggleApi
 from tqdm import tqdm
+
+from utils import normalize_path
 
 # ロギングの設定
 logging.basicConfig(level=logging.INFO)
@@ -43,8 +44,8 @@ def organize_dataset(source_dir: Path, variant: str):
                     target_path = target_class_dir / img_file.name
                     try:
                         shutil.copy2(str(img_file), str(target_path))
-                    except Exception as e:
-                        logger.error(f"Error copying {img_file}: {str(e)}")
+                    except Exception as e:  # noqa: BLE001 - 1件の失敗で処理全体を止めず、ログを残して続行する意図的な捕捉
+                        logger.error(f"Error copying {img_file}: {e!s}")
                         continue
 
     logger.info(f"{variant} dataset organization completed")
@@ -96,13 +97,13 @@ def download_dataset():
         for variant in variants:
             variant_dir = Path(TARGET_DIR) / variant
             if not any(variant_dir.iterdir()):
-                raise Exception(
+                raise RuntimeError(
                     f"No files were created in the {variant} directory")
 
         logger.info("Dataset download and organization completed successfully")
 
     except Exception as e:
-        logger.error(f"Error in dataset processing: {str(e)}")
+        logger.error(f"Error in dataset processing: {e!s}")
         raise
 
 

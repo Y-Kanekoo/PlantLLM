@@ -16,13 +16,13 @@ with patch.dict("os.environ", {"GEMINI_API_KEY": "test_key"}):
     mock_client = MagicMock()
     with patch("google.genai.Client", return_value=mock_client):
         from app_simple import (
-            app,
-            detect_mime_type,
-            process_image,
-            get_extension_from_mime,
+            MAX_FILE_SIZE_BYTES,
             DiagnosisResult,
             _parse_cors_origins,
-            MAX_FILE_SIZE_BYTES,
+            app,
+            detect_mime_type,
+            get_extension_from_mime,
+            process_image,
         )
 
 from starlette.testclient import TestClient
