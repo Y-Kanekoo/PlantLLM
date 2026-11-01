@@ -7,17 +7,18 @@ Webアプリ（app_simple.py）は新SDK（google.genai）に移行済みです�
   - genai.configure(api_key=...) → genai.Client(api_key=...)
   - genai.GenerativeModel(name) → client.models.generate_content(model=name, ...)
 """
-import os
-import json
 import csv
+import json
+import logging
+import os
 import random
 from datetime import datetime
 from pathlib import Path
-import logging
-from PIL import Image
+
 import google.generativeai as genai
-from dotenv import load_dotenv
 import torch
+from dotenv import load_dotenv
+from PIL import Image
 
 # 環境変数の読み込み
 load_dotenv()
@@ -131,8 +132,8 @@ def safe_listdir(path: str) -> list:
         logger.debug(
             f"Listed directory {path_obj}: {len(contents)} items found")
         return contents
-    except Exception as e:
-        logger.error(f"Error listing directory {path}: {str(e)}")
+    except Exception as e:  # noqa: BLE001 - 1件の失敗で処理全体を止めず、ログを残して続行する意図的な捕捉
+        logger.error(f"Error listing directory {path}: {e!s}")
         return []
 
 
@@ -151,8 +152,8 @@ def load_image(image_path: str, max_size: int = 1024) -> Image.Image:
             logger.debug(f"Resized image from {image.size} to {new_size}")
 
         return image
-    except Exception as e:
-        logger.error(f"Error loading image {image_path}: {str(e)}")
+    except Exception as e:  # noqa: BLE001 - 1件の失敗で処理全体を止めず、ログを残して続行する意図的な捕捉
+        logger.error(f"Error loading image {image_path}: {e!s}")
         return None
 
 
@@ -278,7 +279,7 @@ def get_top_k_predictions(response_text: str, k: int = 5) -> list:
     return predictions[:k]
 
 
-def calculate_metrics(predictions: list, true_labels: list, raw_responses: list = None) -> dict:
+def calculate_metrics(predictions: list, true_labels: list, raw_responses: list | None = None) -> dict:
     """評価指標を計算する
 
     Args:
@@ -462,7 +463,7 @@ def sample_images(image_tuples: list, n_samples_per_class: int = 30, seed: int =
     class_images = {}
     for image_tuple in image_tuples:
         # タプルから必要な情報を抽出
-        image_path, label, _ = image_tuple
+        _image_path, label, _ = image_tuple
         if label not in class_images:
             class_images[label] = []
         class_images[label].append(image_tuple)

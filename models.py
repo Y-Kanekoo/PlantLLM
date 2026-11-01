@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import Column, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.ext.declarative import declarative_base
@@ -10,7 +10,7 @@ Base = declarative_base()
 
 def _utc_now() -> datetime:
     """タイムゾーン付きのUTC現在時刻を返す（Python 3.12+推奨形式）"""
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 class Diagnosis(Base):

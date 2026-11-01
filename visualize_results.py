@@ -1,9 +1,9 @@
 import json
-import matplotlib.pyplot as plt
-import seaborn as sns
-import pandas as pd
-import numpy as np
 from pathlib import Path
+
+import matplotlib.pyplot as plt
+import numpy as np
+import seaborn as sns
 
 
 def load_results(file_path):
@@ -77,7 +77,7 @@ def create_confusion_matrix(results):
         pred_labels.append(r['plant_name']['common'])
 
     # ユニークなラベルの取得
-    unique_labels = sorted(list(set(true_labels)))
+    unique_labels = sorted(set(true_labels))
 
     # 混同行列の計算
     matrix = np.zeros((len(unique_labels), len(unique_labels)))

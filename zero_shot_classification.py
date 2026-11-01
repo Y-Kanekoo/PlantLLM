@@ -1,23 +1,23 @@
-import os
-from pathlib import Path
-from tqdm import tqdm
 import concurrent.futures
-import re
 import json
+import os
+import threading
+import time
 from datetime import datetime
-from difflib import get_close_matches
+from pathlib import Path
+from time import sleep
+
+import google.generativeai as genai
+from tqdm import tqdm
+
 from utils import (
-    load_image,
     get_dataset_labels,
+    load_image,
     logger,
     normalize_path,
     safe_listdir,
     sample_images,
 )
-import google.generativeai as genai
-from time import sleep
-import threading
-import time
 
 # 基本設定
 BASE_DATASET_PATH = normalize_path("dataset/PlantVillage_3Variants/color")
@@ -52,7 +52,7 @@ class APILimitCounter:
 
             # より厳密な制限チェック
             if self.daily_requests >= MAX_DAILY_REQUESTS:
-                raise Exception("Daily request limit (1,500) reached")
+                raise RuntimeError("Daily request limit (1,500) reached")
             if self.minute_requests >= 10:  # 余裕を持たせる
                 sleep_time = 60 - (current_time - self.last_reset)
                 time.sleep(max(0, sleep_time))
@@ -355,7 +355,7 @@ def compare_labels(pred_label: str, true_label: str, label_type: str) -> tuple[b
 
 def process_single_image(args):
     """1枚の画像を処理する"""
-    image_path, true_label, labels = args
+    image_path, true_label, _labels = args
     max_retries = 3
     retry_count = 0
 
@@ -416,7 +416,7 @@ def process_single_image(args):
             time.sleep(WAIT_TIME)
             return result
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - API SDK の例外型を問わずリトライ・フォールバックの対象にする意図的な捕捉
             retry_count += 1
             error_msg = str(e)
 

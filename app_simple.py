@@ -5,22 +5,23 @@ import logging
 import os
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
-from google import genai
-from google.genai import types
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from google import genai
+from google.genai import types
+
+# selectinload は N+1 解消でサブクエリ方式に変更したため不要
+from PIL import Image
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-# selectinload は N+1 解消でサブクエリ方式に変更したため不要
-from PIL import Image
 
 from database import get_db, init_db
 from models import ChatMessage, Diagnosis
@@ -44,7 +45,7 @@ app = FastAPI(
 )
 
 # CORS設定: 環境変数で許可オリジンを制御（本番では適切に制限すること）
-def _parse_cors_origins(env_value: str) -> List[str]:
+def _parse_cors_origins(env_value: str) -> list[str]:
     """CORS_ORIGINS環境変数をパースし、空白をトリミングして返す"""
     origins = [origin.strip() for origin in env_value.split(",") if origin.strip()]
     # 空の場合はデフォルト値を使用
@@ -121,7 +122,7 @@ MODELS_CONFIG = [
 class UnifiedRateLimiter:
     def __init__(self):
         self.model_limiters = {}
-        self.global_requests: List[float] = []
+        self.global_requests: list[float] = []
         self.global_limit = 30
         self.time_window = 60
 
@@ -167,7 +168,7 @@ class UnifiedRateLimiter:
         if "429" in str(error):
             limiter["reset_time"] = time.time() + 60
 
-    def get_stats(self, model_name: Optional[str] = None) -> Dict[str, Any]:
+    def get_stats(self, model_name: str | None = None) -> dict[str, Any]:
         if model_name and model_name in self.model_limiters:
             limiter = self.model_limiters[model_name]
             return {
@@ -232,7 +233,7 @@ async def process_image_with_retry(
         Exception: 全てのリトライが失敗した場合
     """
     attempt = 0
-    last_error: Optional[Exception] = None
+    last_error: Exception | None = None
 
     while attempt < retries:
         try:
@@ -244,7 +245,7 @@ async def process_image_with_retry(
                 ],
             )
             return response
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - API SDK の例外型を問わずリトライ・フォールバックの対象にする意図的な捕捉
             last_error = exc
             attempt += 1
             error_str = str(exc)
@@ -271,7 +272,7 @@ async def process_image_with_retry(
     raise RuntimeError("Unexpected state in process_image_with_retry")
 
 
-def process_image(image_data: bytes) -> Dict[str, Any]:
+def process_image(image_data: bytes) -> dict[str, Any]:
     """画像をリサイズし、Gemini API用に処理する。RGBA/Pモードは自動でRGB変換。"""
     try:
         image = Image.open(io.BytesIO(image_data))
@@ -297,7 +298,7 @@ def process_image(image_data: bytes) -> Dict[str, Any]:
         return {"mime_type": "image/jpeg", "data": buffer.getvalue()}
     except Exception as exc:
         logger.error("Image processing failed: %s", exc)
-        raise ValueError(f"画像の処理に失敗しました: {exc}")
+        raise ValueError(f"画像の処理に失敗しました: {exc}") from exc
 
 
 def get_extension_from_mime(mime_type: str) -> str:
@@ -316,7 +317,7 @@ def _cleanup_file(file_path: Path) -> None:
         if file_path.exists():
             file_path.unlink()
             logger.info("Cleaned up orphan file: %s", file_path)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - 1件の失敗で処理全体を止めず、ログを残して続行する意図的な捕捉
         logger.warning("Failed to cleanup file %s: %s", file_path, exc)
 
 
@@ -326,7 +327,7 @@ class ChatRequest(BaseModel):
 
 # Google GenAI クライアント初期化（新SDK）
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-genai_client: Optional[genai.Client] = None
+genai_client: genai.Client | None = None
 
 if not GEMINI_API_KEY:
     logger.warning("GEMINI_API_KEY is not set; diagnosis will fail")
@@ -334,11 +335,11 @@ else:
     try:
         genai_client = genai.Client(api_key=GEMINI_API_KEY)
         logger.info("Google GenAI client initialized successfully")
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - 初期化に失敗してもアプリは起動し、AI 機能のみ無効にする意図的な捕捉
         logger.error("Failed to initialize GenAI client: %s", exc)
 
 
-def get_available_models() -> List[Dict[str, Any]]:
+def get_available_models() -> list[dict[str, Any]]:
     """利用可能なモデル設定を返す"""
     return [{"config": config} for config in MODELS_CONFIG]
 
@@ -348,7 +349,7 @@ if not available_models:
     logger.error("No models configured")
 
 
-def resolve_models(preferred: Optional[str]) -> List[Dict[str, Any]]:
+def resolve_models(preferred: str | None) -> list[dict[str, Any]]:
     if preferred:
         for model_info in available_models:
             if model_info["config"]["name"] == preferred:
@@ -365,7 +366,7 @@ def resolve_models(preferred: Optional[str]) -> List[Dict[str, Any]]:
     return default_first + fallback
 
 
-def format_diagnosis_response(entry: Diagnosis, used_cache: bool) -> Dict[str, Any]:
+def format_diagnosis_response(entry: Diagnosis, used_cache: bool) -> dict[str, Any]:
     return {
         "success": True,
         "entry_id": entry.id,
@@ -431,7 +432,7 @@ async def serve_root() -> HTMLResponse:
 
 
 @app.get("/model-status")
-async def get_model_status() -> Dict[str, Any]:
+async def get_model_status() -> dict[str, Any]:
     return {
         model_name: limiter.get_stats()
         for model_name, limiter in rate_manager.model_limiters.items()
@@ -439,7 +440,7 @@ async def get_model_status() -> Dict[str, Any]:
 
 
 @app.get("/models")
-async def get_models() -> Dict[str, Any]:
+async def get_models() -> dict[str, Any]:
     return {
         "default": DEFAULT_MODEL,
         "models": [
@@ -461,7 +462,7 @@ class DiagnosisResult:
 
 
 async def run_diagnosis(
-    prompt: str, image_data: bytes, model_name: Optional[str] = None
+    prompt: str, image_data: bytes, model_name: str | None = None
 ) -> DiagnosisResult:
     """新しいgoogle.genai SDKを使用して診断を実行"""
     if not genai_client:
@@ -493,7 +494,7 @@ async def run_diagnosis(
                 model_name=config["name"],
                 model_description=config["description"],
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - API SDK の例外型を問わずリトライ・フォールバックの対象にする意図的な捕捉
             last_error = exc
             rate_manager.record_error(config["name"], exc)
             await asyncio.sleep(config["wait_time"])
@@ -507,7 +508,7 @@ async def run_diagnosis(
 @app.post("/diagnose")
 async def diagnose_plant(
     file: UploadFile = File(...),
-    model_name: Optional[str] = None,
+    model_name: str | None = None,
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
     start_time = time.time()
@@ -562,8 +563,8 @@ async def diagnose_plant(
         filename = f"{uuid.uuid4().hex}{ext}"
         image_path = f"/uploads/{filename}"
         full_path = UPLOAD_DIR / filename
-        with open(full_path, "wb") as buffer:
-            buffer.write(contents)
+        # 同期のファイル書き込みでイベントループを止めないよう、スレッドで実行する
+        await asyncio.to_thread(full_path.write_bytes, contents)
 
         processed_image = process_image(contents)
         try:
@@ -584,12 +585,12 @@ async def diagnose_plant(
             # 予期しないエラーの場合も保存したファイルを削除
             _cleanup_file(full_path)
             logger.error("Diagnosis failed: %s", exc)
-            raise HTTPException(status_code=500, detail="診断に失敗しました")
+            raise HTTPException(status_code=500, detail="診断に失敗しました") from exc
 
     processing_time = round(time.time() - start_time, 2)
 
     entry = Diagnosis(
-        created_at=datetime.now(timezone.utc),
+        created_at=datetime.now(UTC),
         image_path=image_path,
         image_hash=image_hash,
         mime_type=detected_mime,  # detect_mime_type基準で保存
@@ -607,7 +608,7 @@ async def diagnose_plant(
 
 
 @app.get("/history")
-async def get_history(limit: int = 20, db: AsyncSession = Depends(get_db)) -> Dict[str, Any]:
+async def get_history(limit: int = 20, db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
     # 上限を超えないよう制限
     limit = min(max(1, limit), MAX_HISTORY_LIMIT)
 
@@ -651,7 +652,7 @@ async def get_history(limit: int = 20, db: AsyncSession = Depends(get_db)) -> Di
 
 
 @app.get("/history/{entry_id}")
-async def get_history_entry(entry_id: int, db: AsyncSession = Depends(get_db)) -> Dict[str, Any]:
+async def get_history_entry(entry_id: int, db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
     entry_query = await db.execute(select(Diagnosis).where(Diagnosis.id == entry_id))
     entry = entry_query.scalar_one_or_none()
     if not entry:
@@ -691,7 +692,7 @@ async def get_history_entry(entry_id: int, db: AsyncSession = Depends(get_db)) -
 
 
 @app.post("/clear-history")
-async def clear_history(db: AsyncSession = Depends(get_db)) -> Dict[str, Any]:
+async def clear_history(db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
     await db.execute(delete(ChatMessage))
     await db.execute(delete(Diagnosis))
     await db.commit()
@@ -700,7 +701,7 @@ async def clear_history(db: AsyncSession = Depends(get_db)) -> Dict[str, Any]:
         try:
             if file_path.is_file():
                 file_path.unlink()
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - 1件の失敗で処理全体を止めず、ログを残して続行する意図的な捕捉
             logger.warning("Failed to remove %s: %s", file_path, exc)
 
     return {"success": True, "message": "履歴を削除しました"}
@@ -711,7 +712,7 @@ async def chat_endpoint(
     entry_id: int,
     payload: ChatRequest,
     db: AsyncSession = Depends(get_db),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """新しいgoogle.genai SDKを使用したチャットエンドポイント"""
     if not genai_client:
         raise HTTPException(status_code=500, detail="GenAIクライアントが初期化されていません")
@@ -751,7 +752,7 @@ async def chat_endpoint(
         reply_text = response.text
     except Exception as exc:
         logger.error("Chat failed: %s", exc)
-        raise HTTPException(status_code=500, detail="チャットに失敗しました")
+        raise HTTPException(status_code=500, detail="チャットに失敗しました") from exc
 
     db.add(ChatMessage(diagnosis_id=entry_id, role="user", message=payload.message))
     db.add(ChatMessage(diagnosis_id=entry_id, role="assistant", message=reply_text))
@@ -773,6 +774,6 @@ if __name__ == "__main__":
     uvicorn.run(
         "app_simple:app",
         host=os.getenv("HOST", "0.0.0.0"),
-        port=int(os.getenv("PORT", 8000)),
+        port=int(os.getenv("PORT", "8000")),
         reload=os.getenv("RELOAD", "true").lower() == "true",
     )
