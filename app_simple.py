@@ -438,10 +438,9 @@ async def serve_root() -> Response:
 
 @app.get("/model-status")
 async def get_model_status() -> dict[str, Any]:
-    # TODO(autonomous): limiter は辞書なので get_stats() が失敗する。別タスクで修正する。
     return {
-        model_name: limiter.get_stats()
-        for model_name, limiter in rate_manager.model_limiters.items()
+        model_name: rate_manager.get_stats(model_name)
+        for model_name in rate_manager.model_limiters
     }
 
 
