@@ -7,12 +7,12 @@ import time
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from google import genai
 from google.genai import types
@@ -87,7 +87,15 @@ MAX_HISTORY_LIMIT = 100  # /history の最大取得件数
 DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "gemini-2.0-flash-exp")
 CHAT_MODEL = os.getenv("CHAT_MODEL", "gemini-1.5-pro")
 
-MODELS_CONFIG = [
+class ModelConfig(TypedDict):
+    name: str
+    description: str
+    retry_count: int
+    wait_time: int
+    quota_limit: int
+
+
+MODELS_CONFIG: list[ModelConfig] = [
     {
         "name": "gemini-2.0-flash-exp",
         "description": "Gemini 2.0 Flash",
@@ -237,12 +245,13 @@ async def process_image_with_retry(
 
     while attempt < retries:
         try:
+            contents: list[types.PartUnion] = [
+                prompt,
+                types.Part.from_bytes(data=image_data, mime_type="image/jpeg"),
+            ]
             response = await client.aio.models.generate_content(
                 model=model_name,
-                contents=[
-                    prompt,
-                    types.Part.from_bytes(data=image_data, mime_type="image/jpeg"),
-                ],
+                contents=contents,
             )
             return response
         except Exception as exc:  # noqa: BLE001 - API SDK の例外型を問わずリトライ・フォールバックの対象にする意図的な捕捉
@@ -275,7 +284,7 @@ async def process_image_with_retry(
 def process_image(image_data: bytes) -> dict[str, Any]:
     """画像をリサイズし、Gemini API用に処理する。RGBA/Pモードは自動でRGB変換。"""
     try:
-        image = Image.open(io.BytesIO(image_data))
+        image: Image.Image = Image.open(io.BytesIO(image_data))
 
         # RGBA/Pモード（透過PNG等）はRGBに変換してJPEG保存エラーを防ぐ
         if image.mode in ("RGBA", "P"):
@@ -284,12 +293,8 @@ def process_image(image_data: bytes) -> dict[str, Any]:
         max_side = max(image.size)
         if max_side > MAX_IMAGE_SIZE:
             ratio = MAX_IMAGE_SIZE / max_side
-            new_size = tuple(int(dim * ratio) for dim in image.size)
-            resample = (
-                Image.Resampling.LANCZOS
-                if hasattr(Image, "Resampling")
-                else Image.LANCZOS
-            )
+            new_size = (int(image.width * ratio), int(image.height * ratio))
+            resample = Image.Resampling.LANCZOS
             image = image.resize(new_size, resample)
 
         buffer = io.BytesIO()
@@ -422,7 +427,7 @@ async def on_startup() -> None:
 
 
 @app.get("/", include_in_schema=False)
-async def serve_root() -> HTMLResponse:
+async def serve_root() -> Response:
     if FRONTEND_INDEX.exists():
         return FileResponse(FRONTEND_INDEX)
     return HTMLResponse(
@@ -762,7 +767,7 @@ async def chat_endpoint(
 
 
 @app.get("/{full_path:path}", include_in_schema=False)
-async def serve_spa(full_path: str) -> HTMLResponse:
+async def serve_spa(full_path: str) -> Response:
     if FRONTEND_INDEX.exists():
         return FileResponse(FRONTEND_INDEX)
     raise HTTPException(status_code=404, detail="Not Found")

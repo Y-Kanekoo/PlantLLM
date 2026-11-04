@@ -143,7 +143,7 @@ Analysis:
 def extract_predictions(response_text: str) -> list:
     """モデルの応答から予測を抽出する"""
     predictions = []
-    current_prediction = {}
+    current_prediction: dict[str, str | float] = {}
     in_prediction = False
 
     logger.debug(f"Raw response text:\n{response_text}")
@@ -543,7 +543,7 @@ def process_dataset() -> dict:
     logger.info(f"Found {len(labels)} labels in dataset")
 
     # 画像パスとラベルのリストを作成（クラスごとに分類）
-    class_images = {label: [] for label in labels}
+    class_images: dict[str, list[tuple[Path, str, list[str]]]] = {label: [] for label in labels}
     for label in labels:
         dir_path = Path(BASE_DATASET_PATH) / label
         if not dir_path.exists():
@@ -644,12 +644,12 @@ def save_results(results: dict, output_dir: str):
     logger.info(f"Results saved to: {output_path}")
 
 
-def save_results_by_type(results: list, output_dir: str, prefix: str = "") -> None:
+def save_results_by_type(results: list, output_dir: str | Path, prefix: str = "") -> None:
     """結果を種類別に保存する
 
     Args:
         results: 分類結果のリスト
-        output_dir: 出力ディレクトリのパス
+        output_dir: 出力ディレクトリのパス（文字列または Path）
         prefix: ファイル名のプレフィックス（デフォルトは空文字）
     """
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -660,8 +660,8 @@ def save_results_by_type(results: list, output_dir: str, prefix: str = "") -> No
     output_path.mkdir(parents=True, exist_ok=True)
 
     # 結果の分類（植物種別、病気別）
-    plant_results = {}
-    disease_results = {}
+    plant_results: dict[str, list[dict]] = {}
+    disease_results: dict[str, list[dict]] = {}
 
     for result in results:
         if not result:
