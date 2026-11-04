@@ -6,17 +6,23 @@ development-hub のテスト標準（https://github.com/Y-Kanekoo/development-hu
 
 | 段階 | コマンド |
 | --- | --- |
-| static | （記入: lint・format・型・秘密情報スキャン） |
-| unit | （記入） |
-| api | （記入） |
-| e2e | `npx playwright test --grep @smoke`（UI がある場合） |
+| setup | `uv venv --python 3.11 .venv`、`uv pip install --python .venv/bin/python -r requirements-web.txt ruff mypy pytest-cov`、frontend/mobile の `npm ci` |
+| static | `uv run --no-project --python .venv/bin/python -m ruff check .`、`uv run --no-project --python .venv/bin/python -m mypy . --ignore-missing-imports`、`gitleaks dir . --no-banner --redact --exit-code 1` |
+| unit | `uv run --no-project --python .venv/bin/python -m pytest -q tests/test_diagnosis_fallback.py --cov=app_simple --cov-fail-under=38`、frontend の build |
+| api | `uv run --no-project --python .venv/bin/python -m pytest -q tests/test_api.py` |
+| e2e | `npx playwright test --grep @smoke`（未実装のため skip） |
 
 まとめて実行: `local-ci run .`、またはコミット後に `local-ci run .`（段階の絞り込み: `--stage static,unit`）。
 
 ## カバレッジ
 
-- unit 段階の下限: 導入時の実測値（記入: ○○%）。引き下げない
+- unit 段階の下限: `app_simple.py` の 38%（2026-11-04 の実測値）。引き下げない
 - 下限は引き下げない。計測から外したファイルと理由:（なし）
+
+## 現行コードとの差分
+
+- Python 12 ファイルが Ruff の一括 format check に通らない。今回の変更では既存ファイル全体の整形を行わず、format gate は未導入。`AGENTS.md` に `TODO(autonomous)` を記録した。
+- frontend/mobile に lint・テスト用 npm script はなく、local-ci の自動検出は install と frontend build のみ。
 
 ## スキップの記録
 
@@ -24,7 +30,7 @@ development-hub のテスト標準（https://github.com/Y-Kanekoo/development-hu
 
 | 段階 | 理由 | 解除条件 | 記録日 |
 | --- | --- | --- | --- |
-| - | （なし） | - | - |
+| e2e | Playwright と `@smoke` のテストが未実装 | 代表シナリオの E2E テスト追加 | 2026-11-04 |
 
 ## 弱体化の確認（レビュー時）
 

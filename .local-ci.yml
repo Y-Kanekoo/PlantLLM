@@ -1,0 +1,35 @@
+# Python の検証を自動検出の frontend/mobile ジョブに追加する。
+fail_fast: true
+include_auto: true
+setup:
+  - uv venv --python 3.11 .venv
+  - uv pip install --python .venv/bin/python -r requirements-web.txt ruff mypy pytest-cov
+jobs:
+  python-lint:
+    kind: lint
+    stage: static
+    run: uv run --no-project --python .venv/bin/python -m ruff check .
+  python-typecheck:
+    kind: typecheck
+    stage: static
+    run: uv run --no-project --python .venv/bin/python -m mypy . --ignore-missing-imports
+  secrets:
+    kind: lint
+    stage: static
+    run: gitleaks dir . --no-banner --redact --exit-code 1
+  python-unit:
+    kind: test
+    stage: unit
+    run: uv run --no-project --python .venv/bin/python -m pytest -q tests/test_diagnosis_fallback.py --cov=app_simple --cov-fail-under=38
+  python-api:
+    kind: api
+    stage: api
+    run: uv run --no-project --python .venv/bin/python -m pytest -q tests/test_api.py
+  # TODO(autonomous): UI の代表シナリオを追加したら E2E を有効化する。
+  frontend-e2e:
+    kind: e2e
+    stage: e2e
+    run: npx playwright test --grep @smoke
+    workdir: frontend
+    skip: true
+    skip_reason: "Playwright と @smoke のテストが未実装"
