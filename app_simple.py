@@ -438,6 +438,7 @@ async def serve_root() -> Response:
 
 @app.get("/model-status")
 async def get_model_status() -> dict[str, Any]:
+    # TODO(autonomous): limiter は辞書なので get_stats() が失敗する。別タスクで修正する。
     return {
         model_name: limiter.get_stats()
         for model_name, limiter in rate_manager.model_limiters.items()
@@ -479,7 +480,7 @@ async def run_diagnosis(
     if not candidates:
         raise HTTPException(status_code=500, detail="利用可能なモデルがありません")
 
-    last_error = None
+    last_error: Exception | None = None
     for model_info in candidates:
         config = model_info["config"]
         if not rate_manager.allow(config["name"]):
@@ -493,9 +494,14 @@ async def run_diagnosis(
                 image_data,
                 retries=config["retry_count"],
             )
+            response_text = response.text
+            if not response_text:
+                last_error = HTTPException(status_code=500, detail="診断結果が空でした")
+                rate_manager.record_error(config["name"], last_error)
+                continue
             # ラッパークラスでモデル情報を返す（SDKレスポンスを変更しない）
             return DiagnosisResult(
-                text=response.text,
+                text=response_text,
                 model_name=config["name"],
                 model_description=config["description"],
             )
