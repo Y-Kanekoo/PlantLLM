@@ -7,17 +7,18 @@ Webアプリ（app_simple.py）は新SDK（google.genai）に移行済みです�
   - genai.configure(api_key=...) → genai.Client(api_key=...)
   - genai.GenerativeModel(name) → client.models.generate_content(model=name, ...)
 """
-import os
-import json
 import csv
+import json
+import logging
+import os
 import random
 from datetime import datetime
 from pathlib import Path
-import logging
-from PIL import Image
+
 import google.generativeai as genai
-from dotenv import load_dotenv
 import torch
+from dotenv import load_dotenv
+from PIL import Image
 
 # 環境変数の読み込み
 load_dotenv()
@@ -98,11 +99,11 @@ STANDARD_LABELS = [
 ]
 
 
-def normalize_path(path: str) -> Path:
+def normalize_path(path: str | Path) -> Path:
     """パスを正規化する
 
     Args:
-        path (str): 正規化するパス
+        path (str | Path): 正規化するパス
 
     Returns:
         Path: 正規化されたPathオブジェクト
@@ -113,11 +114,11 @@ def normalize_path(path: str) -> Path:
     return path_obj
 
 
-def safe_listdir(path: str) -> list:
+def safe_listdir(path: str | Path) -> list:
     """安全にディレクトリの内容を取得する
 
     Args:
-        path (str): 対象ディレクトリのパス
+        path (str | Path): 対象ディレクトリのパス
 
     Returns:
         list: ディレクトリ内のファイル・ディレクトリ名のリスト
@@ -131,32 +132,32 @@ def safe_listdir(path: str) -> list:
         logger.debug(
             f"Listed directory {path_obj}: {len(contents)} items found")
         return contents
-    except Exception as e:
-        logger.error(f"Error listing directory {path}: {str(e)}")
+    except Exception as e:  # noqa: BLE001 - 1件の失敗で処理全体を止めず、ログを残して続行する意図的な捕捉
+        logger.error(f"Error listing directory {path}: {e!s}")
         return []
 
 
-def load_image(image_path: str, max_size: int = 1024) -> Image.Image:
+def load_image(image_path: str | Path, max_size: int = 1024) -> Image.Image | None:
     """画像を読み込み、必要に応じてリサイズする"""
     try:
         path_obj = normalize_path(image_path)
         logger.debug(f"Loading image from: {path_obj}")
-        image = Image.open(path_obj)
+        image: Image.Image = Image.open(path_obj)
 
         # アスペクト比を保持しながらリサイズ
         if max(image.size) > max_size:
             ratio = max_size / max(image.size)
-            new_size = tuple(int(dim * ratio) for dim in image.size)
+            new_size = (int(image.width * ratio), int(image.height * ratio))
             image = image.resize(new_size, Image.Resampling.LANCZOS)
             logger.debug(f"Resized image from {image.size} to {new_size}")
 
         return image
-    except Exception as e:
-        logger.error(f"Error loading image {image_path}: {str(e)}")
+    except Exception as e:  # noqa: BLE001 - 1件の失敗で処理全体を止めず、ログを残して続行する意図的な捕捉
+        logger.error(f"Error loading image {image_path}: {e!s}")
         return None
 
 
-def get_dataset_labels(dataset_path: str) -> list:
+def get_dataset_labels(dataset_path: str | Path) -> list:
     """データセットからラベルリストを生成する"""
     path_obj = normalize_path(dataset_path)
     logger.debug(f"Getting labels from: {path_obj}")
@@ -278,7 +279,7 @@ def get_top_k_predictions(response_text: str, k: int = 5) -> list:
     return predictions[:k]
 
 
-def calculate_metrics(predictions: list, true_labels: list, raw_responses: list = None) -> dict:
+def calculate_metrics(predictions: list, true_labels: list, raw_responses: list | None = None) -> dict:
     """評価指標を計算する
 
     Args:
@@ -377,12 +378,12 @@ def calculate_metrics(predictions: list, true_labels: list, raw_responses: list 
     }
 
 
-def save_results_by_type(results: dict, output_dir: str, prefix: str):
+def save_results_by_type(results: dict, output_dir: str | Path, prefix: str):
     """結果をJSONとCSVファイルに保存する
 
     Args:
         results (dict): 保存する結果
-        output_dir (str): 出力ディレクトリ
+        output_dir (str | Path): 出力ディレクトリ
         prefix (str): ファイル名のプレフィックス
     """
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -459,10 +460,10 @@ def sample_images(image_tuples: list, n_samples_per_class: int = 30, seed: int =
     random.seed(seed)
 
     # クラスごとに画像を分類
-    class_images = {}
+    class_images: dict[str, list[tuple]] = {}
     for image_tuple in image_tuples:
         # タプルから必要な情報を抽出
-        image_path, label, _ = image_tuple
+        _image_path, label, _ = image_tuple
         if label not in class_images:
             class_images[label] = []
         class_images[label].append(image_tuple)

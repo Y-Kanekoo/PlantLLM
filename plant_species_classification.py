@@ -1,16 +1,15 @@
-import os
 import json
+import os
 import random
+import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
-import time
+from time import sleep
+
 import google.generativeai as genai
 from dotenv import load_dotenv
 from PIL import Image
-import pandas as pd
-import numpy as np
-from time import sleep
-from concurrent.futures import ThreadPoolExecutor
 from tqdm import tqdm
 
 # 環境変数の読み込み
@@ -70,7 +69,7 @@ def load_and_prepare_image(image_path):
     try:
         image = Image.open(image_path)
         return image
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - 1件の失敗で処理全体を止めず、ログを残して続行する意図的な捕捉
         print(f"Error loading image {image_path}: {e}")
         return None
 
@@ -157,7 +156,7 @@ def get_plant_species(image_path, max_retries=3, retry_delay=5):
             process_time = time.time() - start_time
 
             if not response.text:
-                raise Exception("Empty response received")
+                raise RuntimeError("Empty response received")
 
             response_text = response.text
             json_str = response_text[response_text.find(
@@ -167,7 +166,7 @@ def get_plant_species(image_path, max_retries=3, retry_delay=5):
 
             return result, response_text, process_time
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - API SDK の例外型を問わずリトライ・フォールバックの対象にする意図的な捕捉
             print(f"Error in classification (attempt {attempt + 1}): {e}")
             backoff_time = handle_api_error(e, attempt, max_retries)
 
@@ -197,7 +196,7 @@ def process_image_batch(image_paths, batch_size=3):
     total_batches = (total_images + batch_size - 1) // batch_size
     processed_images = 0
 
-    print(f"\n処理開始:")
+    print("\n処理開始:")
     print(f"- 総画像数: {total_images}")
     print(f"- バッチサイズ: {batch_size}")
     print(f"- 総バッチ数: {total_batches}\n")
@@ -222,7 +221,7 @@ def process_image_batch(image_paths, batch_size=3):
                     result = future.result()
                     if result[0]:  # result[0]はJSONデータ
                         batch_results.append(result)
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001 - 1件の失敗で処理全体を止めず、ログを残して続行する意図的な捕捉
                     print(f"エラー発生: {e}")
                     continue
 
@@ -234,7 +233,7 @@ def process_image_batch(image_paths, batch_size=3):
             print(f"\nAPI制限対策: {wait_time}秒待機中...")
             sleep(wait_time)
 
-    print(f"\n処理完了:")
+    print("\n処理完了:")
     print(f"- 処理済み画像: {processed_images}/{total_images}")
     print(f"- 成功数: {len(results)}")
 
@@ -304,8 +303,6 @@ def evaluate_species_classification(dataset_path, num_samples=2, batch_size=2, s
     for result in results:
         if result and result[0]:
             json_result = result[0]
-            response_text = result[1]
-            process_time = result[2]
 
             # 正解ラベルを取得（ディレクトリ名から）
             true_label = str(
@@ -368,9 +365,9 @@ if __name__ == "__main__":
             raise FileNotFoundError(f"データセットが見つかりません: {dataset_path}")
 
         print(f"データセット: {dataset_path}")
-        print(f"設定:")
-        print(f"- サンプル数/種: 2")
-        print(f"- バッチサイズ: 2")
+        print("設定:")
+        print("- サンプル数/種: 2")
+        print("- バッチサイズ: 2")
         print("=" * 50)
 
         # 分類実行
@@ -389,9 +386,9 @@ if __name__ == "__main__":
             print("\n警告: 結果が取得できませんでした")
 
     except FileNotFoundError as e:
-        print(f"\nエラー: {str(e)}")
-    except Exception as e:
-        print(f"\n予期せぬエラーが発生しました: {str(e)}")
+        print(f"\nエラー: {e!s}")
+    except Exception as e:  # noqa: BLE001 - スクリプト最上位で想定外のエラーを表示し、トレースバックを出力する
+        print(f"\n予期せぬエラーが発生しました: {e!s}")
         import traceback
         traceback.print_exc()
     finally:

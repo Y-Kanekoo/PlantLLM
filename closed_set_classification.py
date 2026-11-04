@@ -1,14 +1,22 @@
-from utils import init_model
-from utils import (
-    load_image, get_dataset_labels, save_results_by_type,
-    calculate_metrics, logger, normalize_path,
-    safe_listdir, sample_images, calculate_plant_metrics, calculate_disease_metrics, extract_plant_name
-)
-import os
-from pathlib import Path
-from tqdm import tqdm
 import concurrent.futures
 import time
+from pathlib import Path
+
+from tqdm import tqdm
+
+from utils import (
+    calculate_disease_metrics,
+    calculate_plant_metrics,
+    extract_plant_name,
+    get_dataset_labels,
+    init_model,
+    load_image,
+    logger,
+    normalize_path,
+    safe_listdir,
+    sample_images,
+    save_results_by_type,
+)
 
 # モデル設定
 MODEL_NAME = "models/gemini-2.0-flash-exp"  # Gemini 2.0 Flash
@@ -102,7 +110,7 @@ def process_single_image(args):
     Returns:
         dict: 処理結果
     """
-    image_path, true_label, labels = args
+    image_path, true_label, _labels = args
     max_retries = 3
     retry_count = 0
 
@@ -161,7 +169,7 @@ def process_single_image(args):
             time.sleep(WAIT_TIME)
             return result
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - API SDK の例外型を問わずリトライ・フォールバックの対象にする意図的な捕捉
             retry_count += 1
             error_msg = str(e)
 

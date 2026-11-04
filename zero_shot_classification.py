@@ -1,23 +1,23 @@
-import os
-from pathlib import Path
-from tqdm import tqdm
 import concurrent.futures
-import re
 import json
+import os
+import threading
+import time
 from datetime import datetime
-from difflib import get_close_matches
+from pathlib import Path
+from time import sleep
+
+import google.generativeai as genai
+from tqdm import tqdm
+
 from utils import (
-    load_image,
     get_dataset_labels,
+    load_image,
     logger,
     normalize_path,
     safe_listdir,
     sample_images,
 )
-import google.generativeai as genai
-from time import sleep
-import threading
-import time
 
 # 基本設定
 BASE_DATASET_PATH = normalize_path("dataset/PlantVillage_3Variants/color")
@@ -52,7 +52,7 @@ class APILimitCounter:
 
             # より厳密な制限チェック
             if self.daily_requests >= MAX_DAILY_REQUESTS:
-                raise Exception("Daily request limit (1,500) reached")
+                raise RuntimeError("Daily request limit (1,500) reached")
             if self.minute_requests >= 10:  # 余裕を持たせる
                 sleep_time = 60 - (current_time - self.last_reset)
                 time.sleep(max(0, sleep_time))
@@ -143,7 +143,7 @@ Analysis:
 def extract_predictions(response_text: str) -> list:
     """モデルの応答から予測を抽出する"""
     predictions = []
-    current_prediction = {}
+    current_prediction: dict[str, str | float] = {}
     in_prediction = False
 
     logger.debug(f"Raw response text:\n{response_text}")
@@ -355,7 +355,7 @@ def compare_labels(pred_label: str, true_label: str, label_type: str) -> tuple[b
 
 def process_single_image(args):
     """1枚の画像を処理する"""
-    image_path, true_label, labels = args
+    image_path, true_label, _labels = args
     max_retries = 3
     retry_count = 0
 
@@ -416,7 +416,7 @@ def process_single_image(args):
             time.sleep(WAIT_TIME)
             return result
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - API SDK の例外型を問わずリトライ・フォールバックの対象にする意図的な捕捉
             retry_count += 1
             error_msg = str(e)
 
@@ -543,7 +543,7 @@ def process_dataset() -> dict:
     logger.info(f"Found {len(labels)} labels in dataset")
 
     # 画像パスとラベルのリストを作成（クラスごとに分類）
-    class_images = {label: [] for label in labels}
+    class_images: dict[str, list[tuple[Path, str, list[str]]]] = {label: [] for label in labels}
     for label in labels:
         dir_path = Path(BASE_DATASET_PATH) / label
         if not dir_path.exists():
@@ -644,12 +644,12 @@ def save_results(results: dict, output_dir: str):
     logger.info(f"Results saved to: {output_path}")
 
 
-def save_results_by_type(results: list, output_dir: str, prefix: str = "") -> None:
+def save_results_by_type(results: list, output_dir: str | Path, prefix: str = "") -> None:
     """結果を種類別に保存する
 
     Args:
         results: 分類結果のリスト
-        output_dir: 出力ディレクトリのパス
+        output_dir: 出力ディレクトリのパス（文字列または Path）
         prefix: ファイル名のプレフィックス（デフォルトは空文字）
     """
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -660,8 +660,8 @@ def save_results_by_type(results: list, output_dir: str, prefix: str = "") -> No
     output_path.mkdir(parents=True, exist_ok=True)
 
     # 結果の分類（植物種別、病気別）
-    plant_results = {}
-    disease_results = {}
+    plant_results: dict[str, list[dict]] = {}
+    disease_results: dict[str, list[dict]] = {}
 
     for result in results:
         if not result:
