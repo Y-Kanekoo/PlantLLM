@@ -21,7 +21,7 @@ seaborn==0.13.2
 japanize-matplotlib
 
 # Metrics & NLP
-nltk==3.8.1
+nltk==3.9.2
 rouge-score==0.1.2
 sacrebleu==2.4.0
 regex==2024.11.6
