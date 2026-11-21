@@ -1,10 +1,10 @@
-import pandas as pd
-import numpy as np
+from collections import defaultdict
+
 import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
 import seaborn as sns
 from sklearn.metrics import confusion_matrix
-import japanize_matplotlib
-from collections import defaultdict
 
 
 def normalize_label(label):
@@ -69,7 +69,7 @@ def create_confusion_matrix(df):
     """混合行列を作成する"""
     true_labels = df['True Label'].unique()
     pred_labels = df['Top1 Prediction'].unique()
-    all_labels = sorted(list(set(true_labels) | set(pred_labels)))
+    all_labels = sorted(set(true_labels) | set(pred_labels))
 
     # NANを除外
     all_labels = [label for label in all_labels if not pd.isna(label)]
@@ -173,7 +173,7 @@ def plot_plant_specific_metrics(metrics):
     x = np.arange(len(plants))
     width = 0.35
 
-    fig, ax = plt.subplots(figsize=(15, 8))
+    _fig, ax = plt.subplots(figsize=(15, 8))
     rects1 = ax.bar(x - width/2, plant_accuracies, width, label='植物の識別精度')
     rects2 = ax.bar(x + width/2, disease_accuracies, width, label='病気の識別精度')
 
@@ -230,7 +230,7 @@ def plot_sample_distribution(metrics):
     total_samples = sum(samples)
     plt.text(0.02, 0.98, f'総サンプル数: {total_samples}枚',
              transform=plt.gca().transAxes,
-             bbox=dict(facecolor='white', alpha=0.8),
+             bbox={'facecolor': 'white', 'alpha': 0.8},
              verticalalignment='top')
 
     plt.tight_layout()
@@ -243,7 +243,7 @@ def main():
     # CSVファイルの読み込み
     df = pd.read_csv('results/closed_set/closed_set_20250130_183327.csv')
 
-    print(f"\n=== データセットの概要 ===")
+    print("\n=== データセットの概要 ===")
     print(f"総サンプル数: {len(df)}")
 
     # 各種精度の計算

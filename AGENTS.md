@@ -6,6 +6,8 @@
 
 - 目的・非対象・受け入れ条件は README.md に書く。未記入の項目を推測で埋めない。
 - 技術スタック、ディレクトリ構成、プロジェクト固有の禁止事項をこの節に追記する。
+- Python の実行可能な検証は `.local-ci.yml` に定義する。Ruff・mypy・pytest と frontend/mobile の自動検出ジョブを実行する。
+- TODO(autonomous): 既存の Python 12 ファイルを Ruff の format check に通せる状態へ整え、static 段階に追加する。
 
 <!-- development-hub:standards v1 -->
 ## 共通基準（development-hub v1）
@@ -21,7 +23,8 @@
 
 ### 検証
 
-- 完了を報告する前に `local-ci run .`（設定は `local-ci plan .` で確認） を実行し、全件の成功を確認する。失敗、skip、空のテストは合格としない。
+- 実行計画は `local-ci plan .` で確認する。
+- 完了を報告する前に `local-ci run .` を実行し、全件の成功を確認する。失敗、skip、空のテストは合格としない。
 - テストは development-hub のテスト標準（docs/testing-standard.md）に従い、static（lint・format・型・秘密情報）→ unit（カバレッジ下限あり）→ api（外部通信はモックかローカルのフェイク）→ e2e の順に実行する。前の段階が失敗したら止める。段階を飛ばすときは、理由を local-ci 設定の skip_reason と docs/TESTING.md の両方に記録する。
 - GitHub Actions の無料枠に依存しない。既定の検証は local-ci（https://github.com/Y-Kanekoo/local-ci）でローカルに行う。
 - 既存テストを削除・弱体化・skip化しない。エージェントの差分は agent-change-verifier の `acv check --base origin/main` で確認する。

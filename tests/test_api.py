@@ -16,13 +16,14 @@ with patch.dict("os.environ", {"GEMINI_API_KEY": "test_key"}):
     mock_client = MagicMock()
     with patch("google.genai.Client", return_value=mock_client):
         from app_simple import (
-            app,
-            detect_mime_type,
-            process_image,
-            get_extension_from_mime,
+            MAX_FILE_SIZE_BYTES,
+            MODELS_CONFIG,
             DiagnosisResult,
             _parse_cors_origins,
-            MAX_FILE_SIZE_BYTES,
+            app,
+            detect_mime_type,
+            get_extension_from_mime,
+            process_image,
         )
 
 from starlette.testclient import TestClient
@@ -203,13 +204,17 @@ class TestModelStatusEndpoint:
 
     def test_get_model_status(self):
         response = client.get("/model-status")
-        # モデルが初期化されていない場合は空のdictを返す
-        if response.status_code == 200:
-            data = response.json()
-            assert isinstance(data, dict)
-        else:
-            # APIキーがない場合は500エラーになる可能性
-            pytest.skip("Model status requires API key")
+        assert response.status_code == 200
+        data = response.json()
+        assert set(data) == {config["name"] for config in MODELS_CONFIG}
+        for config in MODELS_CONFIG:
+            assert data[config["name"]] == {
+                "total_requests": 0,
+                "error_count": 0,
+                "current_requests": 0,
+                "quota_limit": config["quota_limit"],
+                "is_limited": False,
+            }
 
 
 class TestRootEndpoint:
