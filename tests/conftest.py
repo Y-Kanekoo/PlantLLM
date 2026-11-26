@@ -4,12 +4,11 @@ pytest設定ファイル
 テスト用のフィクスチャとセットアップを定義
 """
 
-import asyncio
 import os
 import sys
 import tempfile
 from pathlib import Path
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -29,6 +28,7 @@ def mock_gemini_api():
 def sample_jpeg_bytes():
     """テスト用のJPEG画像バイト列を生成"""
     from io import BytesIO
+
     from PIL import Image
 
     img = Image.new("RGB", (100, 100), color="blue")
@@ -41,6 +41,7 @@ def sample_jpeg_bytes():
 def sample_png_rgba_bytes():
     """テスト用の透過PNG画像バイト列を生成"""
     from io import BytesIO
+
     from PIL import Image
 
     img = Image.new("RGBA", (100, 100), color=(255, 0, 0, 128))

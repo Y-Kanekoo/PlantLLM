@@ -5,6 +5,7 @@ __pycache__/
 *.pyd
 *.log
 .venv/
+.coverage
 venv/
 venv312/
 .env
